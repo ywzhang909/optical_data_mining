@@ -12,4 +12,7 @@ data
 *.xlsx
 .python-version
 uv.lock
-.ipynb_checkpoints/*
+.ipynb_checkpoints*
+
+# VS Code
+.vscode*

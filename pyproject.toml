@@ -13,6 +13,7 @@ dependencies = [
     "pandas>=2.3.0",
     "plotly>=6.1.2",
     "scikit-learn>=1.7.0",
+    "zernike>=0.0.33",
 ]
 
 [dependency-groups]

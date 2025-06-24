@@ -9,3 +9,7 @@ wheels/
 # Virtual environments
 .venv
 data
+*.xlsx
+.python-version
+uv.lock
+.ipynb_checkpoints/*

@@ -15,6 +15,7 @@ dependencies = [
     "pandas>=2.3.0",
     "plotly>=6.1.2",
     "pygwalker>=0.4.9.15",
+    "pymsql",
     "scikit-learn>=1.7.0",
     "tqdm>=4.67.1",
     "zernike>=0.0.33",

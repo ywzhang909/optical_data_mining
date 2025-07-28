@@ -229,7 +229,7 @@ def parse_timestamp(timestamp_str: str) -> datetime:
         hour=hour,
         minute=minute,
         second=second,
-        microsecond=millisecond * 1000  # 2位毫秒 → 6位微秒（如35ms → 35000μs）
+        microsecond=millisecond * 10000  # 2位毫秒 → 6位微秒（如35ms → 35000μs）
     )
 
 def merge_dict_list(dict_list: list[dict]) -> dict:

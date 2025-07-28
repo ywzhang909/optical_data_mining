@@ -18,6 +18,8 @@ dependencies = [
     "plotly>=6.1.2",
     "pydantic==2.4.2",
     "pytest==7.4.3",
+    "pygwalker>=0.4.9.15",
+    "pymsql",
     "scikit-learn>=1.7.0",
     "tqdm>=4.67.1",
     "uvicorn==0.24.0",
@@ -28,3 +30,7 @@ dependencies = [
 dev = [
     "ipykernel>=6.29.5",
 ]
+
+[[tool.uv.index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true

@@ -2,6 +2,8 @@ import numpy as np
 
 from numpy.typing import NDArray
 
+from utils.light_spots_utils import get_centroids_from_img
+
 def centroids_shifting(imags:list[NDArray]):
     '''监视点光瞳光轴检测相机质心随时间漂移数据，可用于绘制曲线'''
     pass
@@ -39,4 +41,8 @@ def wf_zernike(wfs, order:int=5):
 
 def transfer_effecient():
     '''根据功率计算传输效率，以某一次结果为参考98.4%，计算相对值'''
+    pass
+
+
+if __name__ == '__main__':
     pass

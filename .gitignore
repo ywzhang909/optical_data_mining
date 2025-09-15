@@ -17,3 +17,4 @@ uv.lock
 # VS Code
 .vscode*
 .marscode*
+*.zip

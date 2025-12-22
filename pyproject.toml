@@ -19,11 +19,13 @@ dependencies = [
     "pydantic==2.4.2",
     "pytest==7.4.3",
     "pygwalker>=0.4.9.15",
-    "pymsql",
+    "pymysql",
     "scikit-learn>=1.7.0",
     "tqdm>=4.67.1",
     "uvicorn==0.24.0",
     "zernike>=0.0.33",
+    "singleton-decorator>=1.0.0",
+    "nbstripout>=0.8.2",
 ]
 
 [dependency-groups]

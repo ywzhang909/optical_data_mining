@@ -1,5 +1,6 @@
 {
     "workbench.editorAssociations": {
         "file:/**/*.csv": "jupyter-data-wrangler"
-    }
+    },
+    "python.defaultInterpreterPath": "d:\\Projects\\TIFO\\data-mining\\.venv\\Scripts\\python.exe"
 }

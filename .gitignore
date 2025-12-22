@@ -17,3 +17,10 @@ uv.lock
 # VS Code
 .vscode*
 .marscode*
+.trae*
+
+# UV
+uv.lock
+
+# Export File
+*.docx

@@ -2,5 +2,22 @@
     "workbench.editorAssociations": {
         "file:/**/*.csv": "jupyter-data-wrangler"
     },
-    "python.defaultInterpreterPath": "d:\\Projects\\TIFO\\data-mining\\.venv\\Scripts\\python.exe"
+    "python.defaultInterpreterPath": "d:\\Projects\\TIFO\\data-mining\\.venv\\Scripts\\python.exe",
+    "files.exclude": {
+        "**/.git": true,
+        "**/.svn": true,
+        "**/.hg": true,
+        "**/.DS_Store": true,
+        "**/Thumbs.db": true,
+        ".ipynb_checkpoints": true,
+        ".pytest_cache": true,
+        ".trae": true,
+        ".python-version": true
+    },
+    "hide-files.files": [
+        ".ipynb_checkpoints",
+        ".pytest_cache",
+        ".trae",
+        ".python-version"
+    ]
 }

@@ -26,3 +26,4 @@ uv.lock
 *.docx
 *.zip
 *.pdf
+notebooks/data.ipynb

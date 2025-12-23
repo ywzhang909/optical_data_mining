@@ -26,6 +26,8 @@ dependencies = [
     "zernike>=0.0.33",
     "singleton-decorator>=1.0.0",
     "nbstripout>=0.8.2",
+    "swanlab>=0.7.5",
+    "swifter>=1.4.0",
 ]
 
 [dependency-groups]

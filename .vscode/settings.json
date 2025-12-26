@@ -19,5 +19,6 @@
         ".pytest_cache",
         ".trae",
         ".python-version"
-    ]
+    ],
+    "python-envs.pythonProjects": []
 }

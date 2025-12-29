@@ -28,6 +28,8 @@ dependencies = [
     "nbstripout>=0.8.2",
     "swanlab>=0.7.5",
     "swifter>=1.4.0",
+    "statsmodels>=0.14.6",
+    "runcell>=0.1.14",
     "scikit-image>=0.26.0",
     "statsmodels>=0.14.6",
 ]

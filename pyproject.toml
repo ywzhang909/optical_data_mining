@@ -32,6 +32,9 @@ dependencies = [
     "runcell>=0.1.14",
     "scikit-image>=0.26.0",
     "statsmodels>=0.14.6",
+    "sqlalchemy>=2.0.45",
+    "dotenv>=0.9.9",
+    "ryven>=3.5.0",
 ]
 
 [dependency-groups]
@@ -42,3 +45,18 @@ dev = [
 [[tool.uv.index]]
 url = "https://pypi.tuna.tsinghua.edu.cn/simple"
 default = true
+
+# UV 工具配置
+[tool.uv]
+# 设置缓存目录在项目内，避免跨文件系统问题
+cache-dir = ".uv/cache"
+# 设置链接模式为copy，避免硬链接警告
+link-mode = "copy"
+# 设置Python下载目录
+python-downloads = ".uv/python"
+# 启用并发下载
+concurrency = 4
+# 优先使用二进制包
+prefer-binary = true
+# 禁用哈希要求以提高兼容性
+require-hashes = false

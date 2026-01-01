@@ -1,68 +1,13 @@
 # %%
-import os
-
 import pandas as pd
 
-from PIL import Image
 import numpy as np
-from scipy.ndimage import center_of_mass, fourier_shift, median_filter, generic_filter
-from scipy.optimize import curve_fit
-from scipy.special import factorial
-from scipy.optimize import least_squares
-from scipy.special import erf
-from scipy.signal import lombscargle
+from scipy.ndimage import median_filter, generic_filter
 from scipy import fftpack
-from scipy.fft import fft2, ifftshift, fftshift, ifft2
-from scipy.interpolate import RegularGridInterpolator, interp1d
-from statsmodels.tsa.stattools import adfuller, acf, pacf
-from statsmodels.tsa.seasonal import seasonal_decompose
-from sklearn.metrics import r2_score, mean_squared_error
+from scipy.fft import fft2, ifftshift, fftshift
+from scipy.interpolate import RegularGridInterpolator
 import cv2
-import math
-import matplotlib.pyplot as plt
 
-from pathlib import Path
-import swifter
-from functools import wraps
-
-from data_mining.image.common import read_tiff_to_numpy
-
-# 配置swifter参数以优化性能
-swifter.set_defaults(
-    npartitions=os.cpu_count(),  # 分区数量，根据CPU核心数调整
-    dask_threshold=100,  # 数据量阈值，超过此数量使用dask
-    disable_cache=False,  # 启用缓存
-    progress_bar=True  # 显示进度条
-)
-
-def time_function(func):
-    """装饰器：记录函数执行时间"""
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        start_time = load_time.time()
-        result = func(*args, **kwargs)
-        end_time = load_time.time()
-        print(f"函数 {func.__name__} 执行时间: {end_time - start_time:.4f} 秒")
-        return result
-    return wrapper
-
-root_dir = Path(f'{__file__}').parent.parent / 'data/digitaloptical4Floor'
-assert root_dir.exists(), f"数据目录不存在: {root_dir}"
-
-
-# %%
-# load power meter data
-power_dir = root_dir / Path('功率计数据')
-power_file = power_dir.glob('*.TXT', case_sensitive=False).__next__()
-
-assert power_file.exists(), f'功率数据'
-power_data = pd.read_csv(power_file, sep='\t', encoding='gbk', header=None)
-power_data.columns = ['time', 'power']
-
-load_time = power_file.stem[:17]
-load_info = power_file.stem[18:-1]
-
-saved_info = f'{load_time}({load_info})'
 # %%
 def adaptive_background_subtraction(
     img,
@@ -271,7 +216,6 @@ def calculate_strehl_ratio_with_energy_conservation(
     return strehl, ideal_energy_matched
 # %%
 # 计算BPP和M²
-# TODO 考虑缩束比
 def calculate_bpp_from_pupil_and_focal(
     pupil_diameter_mm,
     focal_diameter_mm,

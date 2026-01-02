@@ -178,7 +178,7 @@ def get_profiles(img, center, line_width=5):
         'vertical': vertical, 'horizontal': horizontal
     }
 
-def normalize_data(data):
+def normalize_data(data, min_val=0, max_val=1):
     """
     Normalize the data to the range [0, 1].
     Args:
@@ -186,12 +186,23 @@ def normalize_data(data):
     Returns:
         np.ndarray: The normalized data array.
     """
-    min_val = np.min(data)
-    max_val = np.max(data)
+    min_val = np.min(data) if min_val is None else min_val
+    max_val = np.max(data) if max_val is None else max_val
     if max_val == min_val:
         return data
     normalized_data = (data - min_val) / (max_val - min_val)
     return normalized_data
+
+def convert_to_cv(image_array):
+    """
+    Convert a numpy array to a CV image.
+    Args:
+        image_array (np.ndarray): The input image array.
+    Returns:
+        np.ndarray: The CV image array.
+    """
+    image_array = normalize_data(image_array, min_val=0, max_val=255)
+    return (image_array * 255).astype(np.uint8)
 
 class Image2D:
 

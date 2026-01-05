@@ -36,6 +36,16 @@ exp_params = (
 # %[markdown]
 # 数据质量分析
 # %%
+exp_data['exp_id'] = exp_data.index
+exp_data['datagroup'] = exp_data['experiment_num'] + exp_data['experiment_group'].apply(str)
+exp_data['sub_beam_count'] = exp_data['experiment_laser_sub_beam'].apply(lambda s: s.count('1') if s else 0)
+exp_sub_beams = exp_data.groupby(['experiment_laser_sub_beam','子束']).agg(
+    {'datagroup': [list,'count'],
+     'experiment_laser_start_time' : list,
+      'sub_beam_count': 'first'}
+)
+exp_sub_beams
+# %%
 hel_exp['experiment_radiation_mode'].value_counts()
 
 # %% _sub_beam 处理子束的情况：如果子束不为空, 则_sub_beam 为 子束的数量；如果子束为空, 则_sub_beam 为空或experiment_laser_sub_beam中1的数量
@@ -110,8 +120,7 @@ hel_exp[env_params].describe()
 '''
 # hel_exp['靶材'].value_counts()
 hel_exp['靶材'] = hel_exp['靶材'].map(
-    {'不锈钢': '不锈钢', '铝合金': '铝合金', '铝': '纯铝'})
-
+    {'不锈钢': '不锈钢', '铝合金': '铝合金', '铝': '铝合金'})
 # %%
 '''
 距离
@@ -164,3 +173,7 @@ hel_exp.groupby(laser_params).agg(
 # %%
 # TODO distinct count
 hel_exp.groupby(ana_params).groups
+
+# %%[markdown]
+# 找出所有数字光学的数据
+

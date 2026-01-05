@@ -1,99 +1,466 @@
-# %%
+import os
+import sys
+sys.path.append('./src')
+
 import pandas as pd
 
 import numpy as np
-from scipy.ndimage import median_filter, generic_filter
-from scipy import fftpack
-from scipy.fft import fft2, ifftshift, fftshift
-from scipy.interpolate import RegularGridInterpolator
+from scipy.ndimage import center_of_mass
+from scipy.optimize import curve_fit
+from scipy.special import erf
+from scipy.signal import lombscargle
+from scipy.fft import fft2, ifftshift, fftshift, ifft2
+from scipy.interpolate import RegularGridInterpolator, interp1d
+from statsmodels.tsa.stattools import adfuller, acf, pacf
+from statsmodels.tsa.seasonal import seasonal_decompose
+from sklearn.metrics import r2_score, mean_squared_error
 import cv2
+import math
+import matplotlib.pyplot as plt
 
-# %%
-def adaptive_background_subtraction(
-    img,
-    kernel_size=21,
-    sigma_factor=3.0,
-    min_background_percentile=10,
-    preserve_energy=True
-):
+from pathlib import Path
+import swifter
+import dotenv
+
+from data_mining.image.common import *
+dotenv.load_dotenv('.')
+
+exp_dir = os.environ.get('EXP_DIR', 'X:/')
+
+# 配置swifter参数以优化性能
+swifter.set_defaults(
+    npartitions=os.cpu_count(),  # 分区数量，根据CPU核心数调整
+    dask_threshold=50,  # 数据量阈值，超过此数量使用dask
+    disable_cache=False,  # 启用缓存
+    progress_bar=True  # 显示进度条
+)
+
+def process_time_columns(df: pd.DataFrame):
     """
-    自适应背景扣除与降噪，适用于激光光斑图像。
+    处理DataFrame中的时间相关列
+    
+    Args:
+        df (pd.DataFrame): 要处理的DataFrame
+    
+    Returns:
+        pd.DataFrame: 处理后的DataFrame
+    """
+    # 添加time列
+    df['time'] = df['path'].apply(lambda x: x.stem)
+    # 提取括号内信息
+    df['info'] = df['time'].str.extract(r'[（\(]([^）\)]*)[）\)]')[0]
+    # 转换时间格式
+    df['time'] = pd.to_datetime(
+        df['time'].str.split('(').str[0].str.replace('：', ':', regex=False),
+        format='%Y%m%d %H:%M:%S.%f'
+    )
+    return df
+
+def process_image_data(df, denoise_method='median'):
+    """
+    处理图像数据：去暗场和计算强度
+    
+    Args:
+        df (pd.DataFrame): 包含img_array列的DataFrame
+        denoise_method (str): 去暗场方法，'median' 或 'min'
+    
+    Returns:
+        pd.DataFrame: 处理后的DataFrame
+    """
+    # 去暗场
+    if denoise_method == 'median':
+        df['black'] = df['img_array'].swifter.apply(lambda x: np.median(x))
+    elif denoise_method == 'min':
+        df['black'] = df['img_array'].swifter.apply(lambda x: np.min(x))
+    # 去噪后的图像
+    black_threshold = df['black'].max()
+    df['denoise_img_array'] = df.apply(lambda x: np.where(x['img_array'] > black_threshold, x['img_array'] - black_threshold, 0), axis=1)
+    # 计算总强度
+    df['intensity'] = df['denoise_img_array'].swifter.apply(np.sum)
+    return df
+
+# =============== Image Func ====================
+
+def d4sigma(img : np.ndarray, pixel_size_um=1.0):
+    """
+    计算图像的 D4σ 直径（一阶矩和二阶矩）
+    
+    Args:
+        img (np.ndarray): 输入图像（2D数组）
+        pixel_size_um (float): 像素尺寸（微米）
+    
+    Returns:
+        tuple: (中心x, 中心y, D4σ_x, D4σ_y)
+    """
+    total = img.sum()
+    cy, cx = center_of_mass(img)
+    h, w = img.shape
+    y, x = np.mgrid[0:h, 0:w]
+    
+    # 二阶中心矩（光强加权）
+    mu_xx = np.sum((x - cx)**2 * img) / total  # σ_x²
+    mu_yy = np.sum((y - cy)**2 * img) / total  # σ_y²
+    Dx = 4 * np.sqrt(max(mu_xx, 0)) * pixel_size_um
+    Dy = 4 * np.sqrt(max(mu_yy, 0)) * pixel_size_um
+    
+    return {
+        'center_x': float(cx),
+        'center_y': float(cy),
+        'D_x': float(Dx),
+        'D_y': float(Dy),
+        'center_intensity': float(img[int(cy), int(cx)]),
+    }
+
+def shift_to_center_fft(image, cx, cy):
+    """
+    使用傅里叶移位将光斑移到图像中心（无插值，保全信息）
     
     参数:
-        img: 输入图像 (2D array, float or uint)
-        kernel_size: 背景估计窗口大小（奇数，建议 15~51）
-        sigma_factor: 判定信号的阈值倍数（通常 2.5~4.0）
-        min_background_percentile: 全局最小背景强度百分位（防过扣除）
-        preserve_energy: 是否在降噪后保持总能量（用于斯特列尔比计算）
+        image: 2D array
+        target_center: (cx, cy) 目标中心，默认为图像几何中心
     
     返回:
-        denoised_img: 降噪并背景扣除后的图像（≥0）
-        background: 估计的背景图像
-        mask: 有效信号区域掩码 (bool)
+        shifted_image: 光斑已居中的图像
     """
-    img = img.astype(np.float64)
+    image = np.asarray(image, dtype=float)
+    h, w = image.shape
+    dx = w//2 - cx
+    dy = h//2 - cy
     
-    # ----------------------------
-    # 1. 局部背景估计：滚动中位数
-    # ----------------------------
-    # 中位数对强信号不敏感，能逼近真实背景
-    background = median_filter(img, size=kernel_size, mode='constant', cval=0)
+    # 傅里叶移位：在频域乘以相位因子
+    # 创建频率网格
+    u = np.fft.fftfreq(w).reshape(1, -1)
+    v = np.fft.fftfreq(h).reshape(-1, 1)
 
-    # 防止背景过高（例如光斑很大时）
-    global_bg_floor = np.percentile(img, min_background_percentile)
-    background = np.minimum(background, img)  # 背景不能高于原图
-    background = np.maximum(background, global_bg_floor)  # 也不能低于全局底噪
+    # 相位因子：exp(-2πi (u*dx + v*dy))
+    phase = np.exp(-2j * np.pi * (u * dx + v * dy))
 
-    # ----------------------------
-    # 2. 局部噪声强度估计：MAD
-    # ----------------------------
-    # MAD = median(|x - median(x)|) ≈ 0.6745 * σ (对高斯噪声)
-    def mad_func(window):
-        med = np.median(window)
-        return np.median(np.abs(window - med))
+    # 应用移位
+    F = np.fft.fft2(image)
+    F_shifted = F * phase
+    shifted = np.real(np.fft.ifft2(F_shifted))
+
+    # 保留非负强度（数值误差可能导致微小负值）
+    shifted = np.clip(shifted, 0, None)
+    return {'shifted_img_array': np.where(shifted < 1e-3, 0, shifted)}
+
+def uniformity(img: np.ndarray, center: tuple, clip_level=0.85):
+    """
+    计算图像的均匀度
     
-    mad_map = generic_filter(img, mad_func, size=kernel_size, mode='constant', cval=0)
-    sigma_map = mad_map / 0.6745  # 转换为标准差估计
+    Args:
+        img (np.ndarray): 输入图像（2D数组）
+    
+    Returns:
+        float: rms, 四象限均匀度
+    """
+    cx, cy = int(center[0]), int(center[1])
+    
+    # 四象限均匀度
+    q1 = img[:cy, :cx].sum()
+    q2 = img[:cy, cx:].sum()
+    q3 = img[cy:, cx:].sum()
+    q4 = img[cy:, :cx].sum()
 
-    # 防止 sigma 过小（数值稳定）
-    sigma_map = np.maximum(sigma_map, np.percentile(sigma_map, 10))
+    q_array = np.asarray([q1, q2, q3, q4])
+    rms = np.mean(np.sqrt((q_array - np.mean(q_array))**2))
 
-    # ----------------------------
-    # 3. 构建显著性掩码
-    # ----------------------------
-    signal = img - background
-    threshold = sigma_factor * sigma_map
-    mask = signal > threshold  # 信噪比 > sigma_factor 的区域保留
+    # four_quadrant_rms = np.sqrt((q1 + q2 + q3 + q4) / 4)
+    return {
+        'rms_4_quadrant': rms
+    }
 
-    # 可选：形态学闭操作连接断裂信号
-    mask = cv2.morphologyEx(
-        mask.astype(np.uint8), 
-        cv2.MORPH_CLOSE, 
-        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    ).astype(bool)
+def piecewise_linear_func(x, l, r, la, ra, mu):
+    """
+    分段线性函数，用于curve_fit拟合
+    - 在区间[l, r]之外为常数mu
+    - 在区间[l, r]内为连接(l, la)和(r, ra)的直线
+    
+    参数:
+    x: 自变量数组
+    l: 区间左端点
+    r: 区间右端点
+    la: x=l时的函数值
+    ra: x=r时的函数值
+    mu: 区间外的常数值
+    """
+    # 初始化输出数组为mu
+    y = np.full_like(x, mu, dtype=float)
+    
+    # 计算区间内的直线部分
+    mask = (x >= l) & (x <= r)
+    if np.any(mask):
+        # 直线方程: y = la + (ra - la) / (r - l) * (x - l)
+        slope = (ra - la) / (r - l) if r != l else 0
+        y[mask] = la + slope * (x[mask] - l)
+    
+    return y
 
-    # ----------------------------
-    # 4. 输出降噪图像
-    # ----------------------------
-    denoised = np.where(mask, img - background, 0.0)
-    denoised = np.maximum(denoised, 0.0)
+def calc_lr_diff(profile):
+    init_mu = np.median(profile)
+    indices = np.where(profile>init_mu)[0]
+    p0 = [indices[0], indices[-1], np.max(profile), np.max(profile), init_mu]
+    bounds = ([0, 0, 0, 0, 0], [len(profile), len(profile), np.max(profile), np.max(profile), np.max(profile)])
+    try:
+        params, _ = curve_fit(piecewise_linear_func, np.arange(len(profile)), profile, p0=p0, bounds=bounds)
+        l, r, la, ra, mu = params
+        
+        #TODO nrms
+        return {
+            'flat_fit_diff': np.abs(ra - la),
+            'flat_fit_diameter': r - l}
+    except:
+        return {
+            'flat_fit_diff': np.nan,
+            'flat_fit_diameter': np.nan
+        }
 
-    if preserve_energy and np.sum(denoised) > 0:
-        # 可选：将被阈值切除的能量按比例加回（保守做法）
-        # 更常见的是直接使用 denoised，因噪声无物理意义
-        pass
+# 高斯拟合
+def gaussian(x, mu, sigma, A, b):
+    """
+    Define the Gaussian function.
 
-    return denoised, background, mask
-# %%
+    Args:
+        x (np.ndarray): Input x values.
+        A (float): Amplitude of the Gaussian.
+        mu (float): Mean of the Gaussian.
+        sigma (float): Standard deviation of the Gaussian.
+
+    Returns:
+        np.ndarray: Output values of the Gaussian function.
+    """
+    return A * np.exp(-(x - mu) ** 2 / (2 * sigma ** 2)) + b
+
+def fitting_gaussian(data):
+    """
+    Fit a Gaussian function to a given data series.
+    Args:
+        data (np.ndarray): The data series to fit a Gaussian function.
+    Returns:
+        tuple: A tuple containing the fitted parameters (A, b, mu, sigma) and the fitted curve.
+    """
+    x_data = np.arange(len(data))
+    initial_guess = [np.argmax(data), 10, np.max(data), 0]
+    try:
+        (mu, sigma, A, b), covariance = curve_fit(gaussian, x_data, data, p0=initial_guess)
+    except RuntimeError:
+        return (np.nan, np.nan, np.nan, np.nan), np.nan
+
+    return (mu, sigma, A, b), covariance
+
+def calculate_diameter(sigma):
+    diameter = 2 * sigma
+    return diameter
+
+def calculate_xy_diameters(image, center_x, center_y):
+    """
+    Calculate the diameters at y = 1/e + b in x and y directions.
+
+    Args:
+        image (np.ndarray): The input image array.
+        centroid (tuple): The (y, x) coordinates of the centroid.
+
+    Returns:
+        tuple: A tuple containing the x-direction diameter and y-direction diameter.
+    """
+    # Extract data for x and y directions
+    y_data = image[:, int(center_x)]
+    x_data = image[int(center_y), :]
+
+    # Calculate diameters
+    (mu, sigma, A, b), conv = fitting_gaussian(x_data)
+    x_diameter = calculate_diameter(sigma)
+    (mu, sigma, A, b), conv = fitting_gaussian(y_data)
+    y_diameter = calculate_diameter(sigma)
+
+    return {'gaussian_dia_x': x_diameter, 'gaussian_dia_y': y_diameter}
+
+# 椭圆拟合
+def convert_to_cv(float_image) -> np.ndarray:
+    """
+    将图像转换为OpenCV兼容的uint8格式
+    """
+    assert isinstance(float_image, np.ndarray), f"{float_image} must be a numpy array, but got {type(float_image)}"
+    image_min = np.min(float_image)
+    image_max = np.max(float_image)
+
+    normalized_image = (float_image - image_min) / (image_max - image_min) * 255
+    uint8_image = normalized_image.astype(np.uint8)
+    return uint8_image
+
+def find_spot_border(image):
+    """
+    处理光斑图片，计算噪声阈值，去除噪声并拟合包含光斑的圆形。
+
+    参数:
+    image (numpy.ndarray): 输入的光斑图片，应为单通道灰度图像。
+
+    返回:
+    numpy.ndarray: 去除噪声后的图像。
+    tuple: 拟合圆形的圆心坐标 (x, y) 和半径。
+    """
+    # 验证输入
+    if not isinstance(image, np.ndarray):
+        raise TypeError(f"find_spot_border expects numpy array, got {type(image)}")
+    
+    # 步骤 1: 高斯降噪
+    denoised_image = cv2.GaussianBlur(image, (3, 3), 0)
+    # 步骤 2: canny边缘检测
+    noise_threshold = np.max(denoised_image) * (1/math.e)
+    denoised_image = np.where(denoised_image > noise_threshold, denoised_image, 0)
+    # 确保数据类型正确
+    if denoised_image.dtype != np.uint8:
+        denoised_image = denoised_image.astype(np.uint8)
+    # 步骤 3: 去除噪声
+    denoised_image = cv2.fastNlMeansDenoising(denoised_image, None, 10, 7, 21)
+    # denoised_image = cv2.Canny(image, 1, 1)
+    # 步骤 4: 二值化
+    near_binary_img = cv2.threshold(denoised_image, noise_threshold, 255, cv2.THRESH_BINARY)[1]
+    # 步骤 5: 拟合一个圆形正好包含光斑
+    contours, _ = cv2.findContours(near_binary_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if contours:
+        # 找到最大的轮廓
+        largest_contour = max(contours, key=cv2.contourArea)
+        ((x, y), radius) = cv2.minEnclosingCircle(largest_contour)
+    else:
+        x, y = np.nan, np.nan
+        radius = np.nan
+
+    return {
+        'border_x': x,
+        'border_y': y,
+        'border_radius': radius
+    }
+
+def ellipse_fit(uint8_image):
+    # 计算噪声阈值（使用30%作为阈值）
+    noise_threshhold = np.max(uint8_image) * 0.3
+    
+    # 二值化处理
+    binary_image = cv2.threshold(uint8_image, noise_threshhold, 255, cv2.THRESH_BINARY)[1]
+    
+    # 查找轮廓
+    try:
+        contours, _ = cv2.findContours(binary_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        assert contours, "No contours found"
+        # 找到最大的轮廓
+        largest_contour = max(contours, key=cv2.contourArea)
+        (ellipse_center_x, ellipse_center_y),(short_axis, long_axis),angle = cv2.fitEllipse(largest_contour)
+    except (AssertionError, ValueError):
+        return {
+            'ellipse_center_x': np.nan,
+            'ellipse_center_y': np.nan,
+            'short_axis': np.nan,
+            'long_axis': np.nan,
+            'ellipticity': np.nan,
+            'angle': np.nan,
+            'uniformity': np.nan
+        }
+    
+    area = cv2.contourArea(largest_contour)
+    # 创建掩膜用于后续处理
+    mask = np.zeros_like(uint8_image, dtype=np.uint8)
+    if area > 100:
+        # 将主轮廓内部填充为白色 (255)
+        cv2.drawContours(mask, [largest_contour], -1, (255,), thickness=cv2.FILLED)
+        # 使用掩膜提取光斑内的所有像素
+        mean_val, std_val = cv2.meanStdDev(uint8_image, mask=mask)
+        mean_intensity = mean_val[0][0]
+        std_intensity = std_val[0][0]
+        uniformity = std_intensity / mean_intensity
+    else:
+        uniformity = np.nan
+    
+    return {
+        'ellipse_center_x': ellipse_center_x,
+        'ellipse_center_y': ellipse_center_y,
+        'short_axis': short_axis,
+        'long_axis': long_axis,
+        'ellipticity': long_axis / short_axis,
+        'angle': angle,
+        'uniformity': uniformity
+    }
+
+def shape_feature_extract(df: pd.DataFrame, use_gpu=False):
+    """
+    提取形状特征，支持GPU加速
+    
+    参数:
+    df: 包含denoise_img_array列的DataFrame
+    use_gpu: 是否使用GPU加速
+    
+    返回:
+    包含形状特征的DataFrame
+    """
+    # 转换图像格式
+    uint8_images = df['denoise_img_array'].apply(convert_to_cv)
+    
+    ellipse_features = pd.DataFrame(uint8_images.swifter.apply(ellipse_fit).tolist(), index=df.index)
+    circle_features = pd.DataFrame(uint8_images.swifter.apply(find_spot_border).tolist(), index=df.index)
+    
+    return pd.merge(df, ellipse_features, left_index=True, right_index=True).merge(circle_features, left_index=True, right_index=True)
+
+def make_coord(img:np.ndarray):
+    """
+    生成坐标矩阵
+
+    :param img: 强度分布
+    :return x, y: 坐标矩阵
+    """
+    h, w = img.shape
+    x, y = np.meshgrid(np.arange(w), np.arange(h))
+    return x, y
+
+def radius(intensity, center, energy=0.99):
+    """
+    以center为圆心，占总能量百分比为energy的圆的半径
+
+    :param intensity: 强度分布
+    :param x: x坐标矩阵
+    :param y: y坐标矩阵
+    :param center: 圆心，坐标，如(0, 0)
+    :param energy: 圆内的能量比，默认0.99，取值范围0~1，常用0.5，0.865， 0.99
+    :return radius: 圆的半径
+    """
+    x, y = make_coord(intensity)
+    npix = len(x)
+    dpix = x[0, 1] - x[0, 0]
+    
+    x0, y0 = center[0], center[1]
+
+    power_in_circle = np.sum(intensity) * energy
+    r = np.sqrt((x - x0) ** 2 + (y - y0) ** 2)
+    radius = npix * dpix / 2
+    radius_change = npix * dpix / 4
+
+    for i in range(300):
+        mask = (np.sign(radius - r) + 1) / 2
+        power = np.sum(intensity * mask)
+
+        if power - power_in_circle < -1e-10 * power_in_circle:
+            radius += radius_change
+        elif power - power_in_circle > 1e-10 * power_in_circle:
+            radius -= radius_change
+        else:
+            break
+
+        radius_change /= 2
+        if radius_change < dpix / 50:
+            break
+        if i == 299:
+            return np.nan
+
+    return {'power99_radius':radius}
+
 def calculate_strehl_ratio_with_energy_conservation(
     pupil_img,
     focus_img,
     pixel_size_pupil_um=5.5,
-    pixel_size_focus_um=3.45,
-    N=0.2,
-    f_mm=100.0,
+    pixel_size_focus_um=5.5,
+    N=1/32,
+    f_mm=3_000,
     wavelength_um=1.064,
-    background_subtract=True,
+    background_subtract=False,
     roi_fraction=0.8
 ):
     """
@@ -214,15 +581,11 @@ def calculate_strehl_ratio_with_energy_conservation(
     strehl = peak_actual / (peak_ideal + 1e-12)
 
     return strehl, ideal_energy_matched
-# %%
-# 计算BPP和M²
+
 def calculate_bpp_from_pupil_and_focal(
     pupil_diameter_mm,
     focal_diameter_mm,
-    focal_length_mm,
-    wavelength_nm=1064.0,
-    beam_expansion_ratio=1.0,
-    pupil_diameter_input_mm=None
+    focal_length_mm = 3e3
 ):
     """
     使用出瞳和焦斑直径（单位：mm）计算 BPP 和 M²，考虑缩束比
@@ -231,9 +594,6 @@ def calculate_bpp_from_pupil_and_focal(
         pupil_diameter_mm: 出瞳 D4σ 直径（毫米）
         focal_diameter_mm: 焦平面 D4σ 直径（毫米）
         focal_length_mm: 透镜焦距（毫米）
-        wavelength_nm: 波长（纳米）
-        beam_expansion_ratio: 光束扩束/缩束比 (>1 表示扩束, <1 表示缩束)
-        pupil_diameter_input_mm: 输入光束直径（毫米），用于计算有效扩束比
     
     Returns:
         dict with results in mm / mm·mrad / mrad
@@ -250,118 +610,157 @@ def calculate_bpp_from_pupil_and_focal(
     # BPP = w_pupil * θ （单位：mm·rad → 转为 mm·mrad）
     bpp_mm_mrad = w_pupil * theta_mrad
     
-    # 如果提供了输入光束直径，计算实际扩束比
-    if pupil_diameter_input_mm is not None:
-        actual_expansion_ratio = pupil_diameter_mm / pupil_diameter_input_mm
-        effective_expansion_ratio = actual_expansion_ratio
-    else:
-        effective_expansion_ratio = beam_expansion_ratio
-        actual_expansion_ratio = beam_expansion_ratio
-    
-    # 计算理想扩束后的理论BPP
-    bpp_theoretical_input = None
-    if pupil_diameter_input_mm is not None:
-        w_input = pupil_diameter_input_mm / 2.0
-        theta_theoretical = theta_rad  # 假设扩束后发散角不变
-        bpp_theoretical_input = w_input * theta_mrad
-    
-    # 衍射极限 BPP (mm·mrad) = λ(μm) / π
-    wavelength_um = wavelength_nm * 1e-3   # nm → μm
-    bpp_diffraction_mm_mrad = wavelength_um / np.pi
-    
-    M2 = bpp_mm_mrad / bpp_diffraction_mm_mrad
-    
-    # 考虑缩束比的影响
-    M2_corrected = M2 / effective_expansion_ratio if effective_expansion_ratio != 0 else np.nan
-    
     return {
         "BPP_mm_mrad": bpp_mm_mrad,
-        "M2": M2,
-        "M2_corrected": M2_corrected,
-        "theta_mrad": theta_mrad,
-        "pupil_radius_mm": w_pupil,
-        "expansion_ratio": actual_expansion_ratio,
-        "bpp_theoretical_input": bpp_theoretical_input,
-        "bpp_diffraction_limit": bpp_diffraction_mm_mrad,
-        "strehl_estimate": np.exp(-M2_corrected**2) if not np.isnan(M2_corrected) else np.nan
     }
 
-# %%
-def compute_wavefront_gradient_tie(intensity_in_focus, intensity_defocus, 
-                                 delta_z, wavelength):
-    """
-    基于光强传输方程 (TIE) 计算波前梯度。
-    该方法需要两张图：一张在焦点，一张离焦 (defocus)。
-    
-    Args:
-        intensity_in_focus: 焦点处的光强图像 (2D array)
-        intensity_defocus: 离焦处的光强图像 (2D array)，通常离焦量为 delta_z
-        delta_z: 离焦距离 (传播距离)
-        wavelength: 激光波长
-    
-    Returns:
-        gradient_x: 波前在 x 方向的梯度 (偏导数)
-        gradient_y: 波前在 y 方向的梯度 (偏导数)
-    """
-    # 1. 预处理：背景扣除和归一化
-    # 假设背景是均匀的，取边缘均值
-    def preprocess(img):
-        # 简单的背景扣除 (取边缘10%)
-        h, w = img.shape
-        margin = int(min(h, w) * 0.1)
-        bg = np.mean(img[margin:-margin, margin:-margin])
-        img_proc = np.maximum(img - bg, 0)
-        return img_proc / np.mean(img_proc) # 归一化平均光强
-    
-    I0 = preprocess(intensity_in_focus)
-    I1 = preprocess(intensity_defocus)
-    
-    # 2. 计算光强沿传播方向的导数 (dI/dz)
-    # 使用中心差分近似
-    dI_dz = (I1 - I0) / delta_z
-    
-    # 3. 计算光强的拉普拉斯算子 (用于TIE方程的分母项处理)
-    # 使用频域拉普拉斯算子计算更稳定
-    def laplacian_fft(img):
-        h, w = img.shape
-        # 生成频率坐标
-        fx = np.fft.fftfreq(w).reshape(1, -1)
-        fy = np.fft.fftfreq(h).reshape(-1, 1)
-        # 拉普拉斯算子在频域是 -(fx^2 + fy^2)
-        k_sq = -(fx**2 + fy**2)
-        # 对图像做FFT，乘以算子，再IFFT回来
-        img_fft = fftpack.fft2(img)
-        lap_fft = img_fft * k_sq
-        return np.real(fftpack.ifft2(lap_fft))
-    
-    # 4. 求解泊松方程 (简化版 TIE)
-    # TIE方程: -dI/dz = div(I * grad(phi))
-    # 在小相位扰动下，可以近似求解 grad(phi)
-    # 这里我们直接计算导致光强变化的“力”场
-    # 注意：严格求解需要解泊松方程，这里为了演示梯度趋势，我们计算归一化的 dI/dz
-    
-    # 波前梯度与光强导数成正比 (在均匀照明假设下)
-    # 实际上，我们需要解: nabla^2(phi) = - (1/I) * dI/dz
-    # 这里返回的是“源项”
-    source_term = - dI_dz / (I0 + 1e-6) # 加上小量防止除零
-    
-    # 5. (可选) 通过解泊松方程获得平滑的梯度场
-    # 这里我们直接返回源项作为梯度的“指示器”
-    # 如果你需要真实的连续波前，需要对 source_term 进行泊松反演
-    
-    return source_term
+# =============== 全局变量 ==========================
+# TODO 一次实验的指标提取
+'''
+1. 出光时间
+'''
 
-def wavefront_tie(df: pd.DataFrame, delta_z=3, wavelength=1064e-9):
-    """
-    对DataFrame中的每一行计算波前梯度图
-    """
-    df['wavefront_gradient_map'] = df.swifter.apply(
-        lambda row: compute_wavefront_gradient_tie(
-            row['denoise_img_array_axis'],
-            row['denoise_img_array_axis_defocus'],
-            delta_z,
-            wavelength
-        ),
-        axis=1
+
+# ===================================================
+
+def process_all(axis_beam_dir, pupil_beam_dir, exp_id):
+    print(exp_id)
+
+    axis_beam_img_path = Path(axis_beam_dir).glob('*.TIFF')
+    pupil_beam_img_path = Path(pupil_beam_dir).glob('*.TIFF')
+
+    axis_beam = pd.DataFrame([{'path': path} for path in axis_beam_img_path])
+    pupil_beam = pd.DataFrame([{'path': path} for path in pupil_beam_img_path])
+
+    axis_beam['img_array'] = axis_beam['path'].apply(read_tiff_to_numpy)
+    pupil_beam['img_array'] = pupil_beam['path'].apply(read_tiff_to_numpy)
+
+    def process_beam_data(beam_df, denoise_method='median'):
+        beam_df = process_time_columns(beam_df)
+        # 降噪、计算亮度
+        beam_df = process_image_data(beam_df, denoise_method)
+        return beam_df
+
+    axis_beam = process_beam_data(axis_beam, 'median')
+    pupil_beam = process_beam_data(pupil_beam, 'median')
+
+    valid_axis_beam = axis_beam[axis_beam['intensity'] > 10]
+    valid_pupil_beam = pupil_beam[pupil_beam['intensity'] > 10]
+
+    # TODO 计算出光时间
+
+    print(valid_pupil_beam.iloc[0]['time'], valid_axis_beam.iloc[-1]['time'])
+
+    def d4sigma_feature_extract(df: pd.DataFrame):
+        d4sigma_features = df.swifter.apply(lambda x: d4sigma(x['denoise_img_array']), axis=1, result_type='expand')
+        d4sigma_features['avg_sigma2'] = np.sqrt(d4sigma_features['D_x'] * d4sigma_features['D_y'])
+        return pd.merge(df, d4sigma_features, left_index=True, right_index=True)
+
+    valid_axis_beam = d4sigma_feature_extract(valid_axis_beam)
+    valid_pupil_beam = d4sigma_feature_extract(valid_pupil_beam)
+
+    center_axis_beam = valid_axis_beam.swifter.apply(
+        lambda x: shift_to_center_fft(x['denoise_img_array'], x['center_x'], x['center_y']), axis=1, result_type='expand'
     )
-    return df
+    valid_axis_beam = pd.merge(valid_axis_beam, center_axis_beam, left_index=True, right_index=True)
+
+    center_pupil_beam = valid_pupil_beam.swifter.apply(
+        lambda x: shift_to_center_fft(x['denoise_img_array'], x['center_x'], x['center_y']), axis=1, result_type='expand'
+    )
+    valid_pupil_beam = pd.merge(valid_pupil_beam, center_pupil_beam, left_index=True, right_index=True)
+
+    uniformity_features = valid_pupil_beam.swifter.apply(
+        lambda x: uniformity(x['denoise_img_array'], (x['center_x'], x['center_y'])), axis=1, result_type='expand'
+    )
+
+    valid_pupil_beam = pd.merge(valid_pupil_beam, uniformity_features, left_index=True, right_index=True)
+
+    xy_profile = valid_pupil_beam.swifter.apply(
+        lambda x: get_profiles(
+            x['denoise_img_array'], (x['center_x'], x['center_y'])), result_type='expand', axis=1
+    )
+
+    fit_features = xy_profile.swifter.apply(
+        lambda x: calc_lr_diff(x['vertical']), axis=1, result_type='expand'
+    )
+    valid_pupil_beam = pd.merge(valid_pupil_beam, fit_features, left_index=True, right_index=True)
+
+    guassian_dia = valid_axis_beam.swifter.apply(
+        lambda x: calculate_xy_diameters(x['denoise_img_array'], x['center_x'], x['center_y']),
+        axis=1, result_type='expand'
+    )
+
+    valid_axis_beam = pd.merge(valid_axis_beam, guassian_dia, left_index=True, right_index=True)
+
+    valid_axis_beam = shape_feature_extract(valid_axis_beam, use_gpu=True)
+    valid_pupil_beam = shape_feature_extract(valid_pupil_beam, use_gpu=True)
+
+    def calc_radius(x: pd.Series):
+        radius_feature = radius(x['denoise_img_array'], center = (x['center_x'], x['center_y']))
+        return radius_feature
+
+    radius_feature = valid_pupil_beam.swifter.apply(calc_radius ,axis=1, result_type='expand')
+    valid_pupil_beam = pd.merge(valid_pupil_beam, radius_feature, left_index=True, right_index=True)
+
+    # 光瞳光轴对齐
+    valid_axis_beam.sort_values('time', inplace=True)
+    valid_pupil_beam.sort_values('time', inplace=True)
+
+    # 合并数据，按时间nearest join
+    if len(valid_axis_beam) < len(valid_pupil_beam):
+        merged_beam = pd.merge_asof(
+            valid_axis_beam,
+            valid_pupil_beam,
+            on='time',
+            direction='nearest',
+            suffixes=('_axis', '_pupil')
+        )
+    else:
+        merged_beam = pd.merge_asof(
+            valid_pupil_beam,
+            valid_axis_beam,
+            on='time',
+            direction='nearest',
+            suffixes=('_pupil', '_axis')
+        )
+
+    strehl_results_with_scaler = merged_beam.swifter.apply(
+        lambda row: calculate_strehl_ratio_with_energy_conservation(row['shifted_img_array_pupil'], row['shifted_img_array_axis']),
+        axis=1,
+        result_type='expand'
+    )
+    strehl_results_with_scaler.columns = ['strehl_ratio', 'ideal_matched']
+    merged_beam = pd.merge(merged_beam, strehl_results_with_scaler, left_index=True, right_index=True)
+
+    bpp_results = merged_beam.swifter.apply(
+    lambda row: calculate_bpp_from_pupil_and_focal(row['avg_sigma2_pupil'], row['avg_sigma2_axis']),
+    axis=1, result_type='expand')
+
+    merged_beam = pd.merge(merged_beam, bpp_results, left_index=True, right_index=True) 
+
+    # merged_beam['path'] = merged_beam['path'].astype(str)
+    # merged_beam['time'] = merged_beam['time'].astype(str)
+    for c in merged_beam.select_dtypes(input=['object']).columns:
+        merged_beam[c] = merged_beam[c].astype(str)
+    merged_beam.to_parquet(f'{exp_dir}/temp/do/{exp_id}.parquet', compression='zstd')
+
+    merged_beam.set_index('time', drop=True, inplace=True)
+    merged_beam.to_excel(f'{exp_dir}/temp/do/{exp_id}.xlsx')
+    del merged_beam, valid_axis_beam, valid_pupil_beam, axis_beam, pupil_beam
+
+def main():
+    done_exp_ids = (p.stem for p in Path(f'{exp_dir}/temp/do').glob('*.parquet'))
+
+    do_arch_data = pd.read_excel(f"{exp_dir}/实验记录v20251230 - 加数字光学.xlsx", header=1)
+    do_arch_data = do_arch_data[~do_arch_data['实验编号'].isin(done_exp_ids)]\
+        .dropna(subset=['实验编号', '光轴文件夹路径', '光瞳文件夹路径'], how='any')
+    
+    print(len(do_arch_data))
+    do_arch_data['光轴文件夹路径'] = do_arch_data['光轴文件夹路径'].str.replace('X:', exp_dir)
+    do_arch_data['光瞳文件夹路径'] = do_arch_data['光瞳文件夹路径'].str.replace('X:', exp_dir)
+    do_arch_data.apply(
+        lambda x: process_all(x['光轴文件夹路径'], x['光瞳文件夹路径'], x['实验编号']), axis=1
+    )
+
+if __name__ == '__main__':
+    main()

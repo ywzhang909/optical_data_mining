@@ -2,6 +2,7 @@
 # Compiled and build artifacts
 *.pyc
 __pycache__/
+.ipynb_checkpoints*
 
 # Dependencies
 .venv/
@@ -11,6 +12,7 @@ venv/
 *.log
 *.tmp
 *.swp
+data*
 
 # Environment
 .env
@@ -31,4 +33,3 @@ htmlcov/
 dist/
 build/
 *.egg-info/
-```

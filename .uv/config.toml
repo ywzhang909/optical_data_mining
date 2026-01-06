@@ -1,0 +1,26 @@
+# UV 配置文件
+# 设置默认库目录到当前项目磁盘下
+
+# 缓存目录设置在项目目录下，避免跨文件系统硬链接问题
+cache-dir = ".uv/cache"
+
+# 链接模式设置
+# copy模式可以避免硬链接警告，但会占用更多空间
+# link模式性能更好，但可能在跨文件系统时失败
+link-mode = "copy"
+
+# Python下载模式设置
+python-downloads = "automatic"
+
+# 虚拟环境设置
+# 可以在项目根目录创建虚拟环境
+venv = ".venv"
+
+# 索引设置
+# 使用现有的清华镜像源
+[index]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
+
+# 并发下载设置
+concurrent-downloads = 4

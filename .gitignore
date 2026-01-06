@@ -27,3 +27,4 @@ uv.lock
 *.zip
 *.pdf
 notebooks/pupil_remove_fringes.ipynb
+doc/ao/*.bmp

@@ -12,13 +12,19 @@
         ".ipynb_checkpoints": true,
         ".pytest_cache": true,
         ".trae": true,
-        ".python-version": true
+        ".python-version": true,
+        ".uv": true,
+        "build": true,
+        "uv.lock": true
     },
     "hide-files.files": [
         ".ipynb_checkpoints",
         ".pytest_cache",
         ".trae",
-        ".python-version"
+        ".python-version",
+        ".uv",
+        "build",
+        "uv.lock"
     ],
     "python-envs.pythonProjects": [],
     "python.testing.pytestArgs": [

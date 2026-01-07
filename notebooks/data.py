@@ -7,22 +7,16 @@ import pandas as pd
 import numpy as np
 from scipy.ndimage import center_of_mass
 from scipy.optimize import curve_fit
-from scipy.special import erf
-from scipy.signal import lombscargle
-from scipy.fft import fft2, ifftshift, fftshift, ifft2
-from scipy.interpolate import RegularGridInterpolator, interp1d
-from statsmodels.tsa.stattools import adfuller, acf, pacf
-from statsmodels.tsa.seasonal import seasonal_decompose
-from sklearn.metrics import r2_score, mean_squared_error
+from scipy.fft import fft2, ifftshift, fftshift
+from scipy.interpolate import RegularGridInterpolator
 import cv2
 import math
-import matplotlib.pyplot as plt
 
 from pathlib import Path
 import swifter
 import dotenv
 
-from data_mining.image.common import *
+from data_mining.image.common import get_profiles, read_tiff_to_numpy
 dotenv.load_dotenv('.')
 
 exp_dir = os.environ.get('EXP_DIR', 'X:/')
@@ -196,6 +190,13 @@ def piecewise_linear_func(x, l, r, la, ra, mu):
     
     return y
 
+def calculate_sharpness(img:np.ndarray):
+  gradient_x = np.gradient(img, axis=1)
+  gradient_y = np.gradient(img, axis=0)
+  gradient_magnitude = np.sqrt(gradient_x**2 + gradient_y**2)
+  sharpness = np.mean(gradient_magnitude)
+  return sharpness
+
 def calc_lr_diff(profile):
     init_mu = np.median(profile)
     indices = np.where(profile>init_mu)[0]
@@ -208,11 +209,13 @@ def calc_lr_diff(profile):
         #TODO nrms
         return {
             'flat_fit_diff': np.abs(ra - la),
+            'flat_fit_ndiff': np.abs(ra - la) / np.abs(r - l),
             'flat_fit_diameter': r - l}
     except:
         return {
             'flat_fit_diff': np.nan,
-            'flat_fit_diameter': np.nan
+            'flat_fit_ndiff': np.nan,
+            'flat_fit_diameter': np.nan,
         }
 
 # 高斯拟合
@@ -626,6 +629,7 @@ def calculate_bpp_from_pupil_and_focal(
 def process_all(axis_beam_dir, pupil_beam_dir, exp_id):
     print(exp_id)
 
+    # 1. 读取所有 TIFF 文件
     axis_beam_img_path = Path(axis_beam_dir).glob('*.TIFF')
     pupil_beam_img_path = Path(pupil_beam_dir).glob('*.TIFF')
 
@@ -635,6 +639,7 @@ def process_all(axis_beam_dir, pupil_beam_dir, exp_id):
     axis_beam['img_array'] = axis_beam['path'].apply(read_tiff_to_numpy)
     pupil_beam['img_array'] = pupil_beam['path'].apply(read_tiff_to_numpy)
 
+    # 2. 处理时间
     def process_beam_data(beam_df, denoise_method='median'):
         beam_df = process_time_columns(beam_df)
         # 降噪、计算亮度
@@ -651,6 +656,7 @@ def process_all(axis_beam_dir, pupil_beam_dir, exp_id):
 
     print(valid_pupil_beam.iloc[0]['time'], valid_axis_beam.iloc[-1]['time'])
 
+    # 3. 提取出瞳和焦斑直径
     def d4sigma_feature_extract(df: pd.DataFrame):
         d4sigma_features = df.swifter.apply(lambda x: d4sigma(x['denoise_img_array']), axis=1, result_type='expand')
         d4sigma_features['avg_sigma2'] = np.sqrt(d4sigma_features['D_x'] * d4sigma_features['D_y'])
@@ -659,41 +665,51 @@ def process_all(axis_beam_dir, pupil_beam_dir, exp_id):
     valid_axis_beam = d4sigma_feature_extract(valid_axis_beam)
     valid_pupil_beam = d4sigma_feature_extract(valid_pupil_beam)
 
-    center_axis_beam = valid_axis_beam.swifter.apply(
-        lambda x: shift_to_center_fft(x['denoise_img_array'], x['center_x'], x['center_y']), axis=1, result_type='expand'
-    )
-    valid_axis_beam = pd.merge(valid_axis_beam, center_axis_beam, left_index=True, right_index=True)
-
-    center_pupil_beam = valid_pupil_beam.swifter.apply(
-        lambda x: shift_to_center_fft(x['denoise_img_array'], x['center_x'], x['center_y']), axis=1, result_type='expand'
-    )
-    valid_pupil_beam = pd.merge(valid_pupil_beam, center_pupil_beam, left_index=True, right_index=True)
-
+    # 4. 提取出瞳的均匀性指标
     uniformity_features = valid_pupil_beam.swifter.apply(
         lambda x: uniformity(x['denoise_img_array'], (x['center_x'], x['center_y'])), axis=1, result_type='expand'
     )
 
     valid_pupil_beam = pd.merge(valid_pupil_beam, uniformity_features, left_index=True, right_index=True)
 
+    # 5. 提取出瞳的锐度指标
+    sharpness_fit = valid_pupil_beam.swifter.apply(
+        lambda x: calculate_sharpness(x['denoise_img_array']), axis=1, result_type='expand'
+    )
+    sharpness_fit.columns = ['sharpness_fit']
+    valid_pupil_beam = pd.merge(valid_pupil_beam, sharpness_fit, left_index=True, right_index=True)
+
+    # 6. 提取出瞳的垂直和水平投影
     xy_profile = valid_pupil_beam.swifter.apply(
         lambda x: get_profiles(
             x['denoise_img_array'], (x['center_x'], x['center_y'])), result_type='expand', axis=1
     )
-
     fit_features = xy_profile.swifter.apply(
         lambda x: calc_lr_diff(x['vertical']), axis=1, result_type='expand'
     )
     valid_pupil_beam = pd.merge(valid_pupil_beam, fit_features, left_index=True, right_index=True)
 
+    # 7. 提取出轴的高斯直径
     guassian_dia = valid_axis_beam.swifter.apply(
         lambda x: calculate_xy_diameters(x['denoise_img_array'], x['center_x'], x['center_y']),
         axis=1, result_type='expand'
     )
 
     valid_axis_beam = pd.merge(valid_axis_beam, guassian_dia, left_index=True, right_index=True)
-
+    
+    # 8. 提取出形状指标
     valid_axis_beam = shape_feature_extract(valid_axis_beam, use_gpu=True)
     valid_pupil_beam = shape_feature_extract(valid_pupil_beam, use_gpu=True)
+    
+    center_axis_beam = valid_axis_beam.swifter.apply(
+        lambda x: shift_to_center_fft(x['denoise_img_array'], x['border_x'], x['border_y']), axis=1, result_type='expand'
+    )
+    valid_axis_beam = pd.merge(valid_axis_beam, center_axis_beam, left_index=True, right_index=True)
+
+    center_pupil_beam = valid_pupil_beam.swifter.apply(
+        lambda x: shift_to_center_fft(x['denoise_img_array'], x['border_x'], x['border_y']), axis=1, result_type='expand'
+    )
+    valid_pupil_beam = pd.merge(valid_pupil_beam, center_pupil_beam, left_index=True, right_index=True)
 
     def calc_radius(x: pd.Series):
         radius_feature = radius(x['denoise_img_array'], center = (x['center_x'], x['center_y']))

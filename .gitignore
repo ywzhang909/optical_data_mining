@@ -28,3 +28,4 @@ uv.lock
 *.pdf
 notebooks/pupil_remove_fringes.ipynb
 doc/ao/*.bmp
+doc/ao/*.png

@@ -17,6 +17,10 @@ import matplotlib.pyplot as plt
 project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 
+# 配置matplotlib支持中文
+plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'DejaVu Sans']
+plt.rcParams['axes.unicode_minus'] = False
+
 # 测试数据生成函数
 def generate_test_images(num_images=5, image_size=(256, 256)):
     """生成测试用的模拟激光光斑图像"""

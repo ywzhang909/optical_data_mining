@@ -45,6 +45,17 @@ except ImportError:
     print("警告: Ryven 库未安装。请使用 'pip install ryven' 安装")
     RYVEN_AVAILABLE = False
 
+
+# 配置matplotlib支持中文
+try:
+    import matplotlib.pyplot as plt
+    import warnings
+    plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'DejaVu Sans']
+    plt.rcParams['axes.unicode_minus'] = False
+    warnings.filterwarnings('ignore', category=UserWarning, module='matplotlib')
+except ImportError:
+    pass
+
 # %%
 class BeamAnalysisNodes:
     """激光光束分析节点集合"""

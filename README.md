@@ -14,6 +14,7 @@
 - **去噪算法**：中值滤波、最小值滤波等多种去噪方法
 - **背景扣除**：自动暗场校正
 - **质心计算**：基于强度加权的高精度质心定位
+- **Notebook算法模块化**：将原 notebook 中常用算法沉淀为可复用包函数（如 `d4sigma`、`uniformity`、`radius`、`calculate_strehl_ratio_with_energy_conservation`）
 
 ### 3. 光束特征提取
 - **D4σ直径计算**：基于一阶矩和二阶矩的光斑尺寸测量
@@ -47,8 +48,7 @@
 │   │   ├── common.py             # 通用图像处理函数
 │   │   ├── process.py            # 图像处理流程
 │   │   └── zernike.py            # Zernike多项式拟合
-│   └── services/
-│       └── spots_service.py      # 光斑分析服务
+│   └── workflow/                 # 配置化工作流与编排集成
 ├── notebooks/
 │   ├── data.ipynb                # 主要数据分析notebook
 │   ├── zernike_fit_near_spot.ipynb # Zernike拟合示例
@@ -79,15 +79,57 @@ Pillow>=8.3.0
 swifter>=1.1.0
 ```
 
-### 安装步骤
+### 安装步骤（推荐 pip / uv）
 1. 克隆项目到本地
-2. 安装依赖：
+2. 在项目根目录安装：
    ```bash
-   pip install -r requirements.txt
+   pip install .
    ```
-3. 确保所有依赖项正确安装
+   或开发模式安装：
+   ```bash
+   pip install -e .[dev]
+   ```
+3. 安装后可直接通过 `data_mining` 包导入功能，无需手动修改 `sys.path`。
 
 ## 📖 使用指南
+
+### 工作流编排与可配置数据源
+
+项目已支持**配置驱动的轻量工作流**，可在不改代码的情况下配置：
+- 数据源（`image_file`、`video_file`、`image_folder`、`rabbitmq_folder_path`，以及 `tiff_dir`、`numpy_files`）
+- 预处理/特征提取步骤（如 `d4sigma`、`uniformity`、`radius`、`ellipse_fit`）
+- 步骤间参数引用（如把上一步的质心结果传给下一步）
+
+示例配置见：`configs/workflow_example.json`。运行时可调用：
+
+```python
+from data_mining.workflow import run_pipeline
+records = run_pipeline("configs/workflow_example.json")
+```
+
+也支持 YAML 配置模板（`configs/workflow_template.yaml`），并带有配置校验：
+
+```python
+from data_mining.workflow import load_workflow_config
+cfg = load_workflow_config("configs/workflow_template.yaml")
+```
+
+如果你后续需要完整的 DAG / 调度 / 可视化编排，推荐集成以下开源软件：
+- **Prefect**：Python 原生，接入门槛低，适合实验室与数据分析团队
+- **Dagster**：资产化建模强，适合长期维护的数据产品
+- **Apache Airflow**：生态成熟，适合复杂定时调度场景
+
+如果要直接集成 Prefect，可用：
+
+```python
+from data_mining.workflow import build_prefect_flow
+flow = build_prefect_flow("configs/workflow_template.yaml", flow_name="beam-feature-pipeline")
+flow()
+```
+
+更多数据源示例配置：
+- `configs/workflow_video_example.json`（光斑视频帧输入）
+- `configs/workflow_rabbitmq_example.json`（RabbitMQ 消息内容为图片文件夹路径）
 
 ### 快速开始
 
@@ -99,9 +141,6 @@ swifter>=1.1.0
 2. **运行分析**
    ```python
    # 在Jupyter Notebook中
-   import sys
-   sys.path.append('../src')
-   
    from data_mining.image.common import get_profiles
    from data_mining.fitting.fit_funcs import DoubleErfPulse
    
@@ -131,7 +170,8 @@ fall_time = fit.fall_time
 
 #### 光束特征提取
 ```python
-from data_mining.image.common import get_profiles, d4sigma
+from data_mining.image.common import get_profiles
+from data_mining.image import d4sigma
 
 # 提取光束截面
 profiles = get_profiles(image_array, center=(cx, cy))

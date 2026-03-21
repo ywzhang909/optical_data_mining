@@ -5,14 +5,9 @@
 Unit tests for the image processing functions in process.py
 """
 
-import sys
-import os
 import numpy as np
 import pytest
 from unittest.mock import Mock, patch
-
-# Add the src directory to the path to allow imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'data_mining'))
 
 # Patch the FunctionRegistry decorator to avoid import issues
 with patch('data_mining.image.common.FunctionRegistry'):

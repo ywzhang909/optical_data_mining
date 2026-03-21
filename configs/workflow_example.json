@@ -1,0 +1,33 @@
+{
+  "source": {
+    "type": "tiff_dir",
+    "path": "./data/002/digitaloptical4Floor/光轴image",
+    "pattern": "*.TIFF"
+  },
+  "steps": [
+    {
+      "name": "d4sigma",
+      "input": "image",
+      "output": "moments"
+    },
+    {
+      "name": "uniformity",
+      "input": "image",
+      "params": {
+        "center": ["$moments.center_x", "$moments.center_y"]
+      }
+    },
+    {
+      "name": "radius",
+      "input": "image",
+      "params": {
+        "center": ["$moments.center_x", "$moments.center_y"],
+        "energy": 0.9
+      }
+    },
+    {
+      "name": "ellipse_fit",
+      "input": "image"
+    }
+  ]
+}

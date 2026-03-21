@@ -1,0 +1,13 @@
+{
+  "source": {
+    "type": "rabbitmq_folder_path",
+    "host": "localhost",
+    "port": 5672,
+    "queue": "spot_folder_queue",
+    "pattern": "*.TIFF"
+  },
+  "steps": [
+    {"name": "d4sigma", "input": "image", "output": "moments"},
+    {"name": "radius", "input": "image", "params": {"center": ["$moments.center_x", "$moments.center_y"], "energy": 0.9}}
+  ]
+}

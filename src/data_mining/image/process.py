@@ -9,6 +9,11 @@ from skimage import filters, measure, morphology
 from .common import SpotImage, FunctionRegistry
 
 
+def _get_coordinate_grids(spot_image: SpotImage) -> tuple[np.ndarray, np.ndarray]:
+    """Return meshgrid coordinates for a :class:`SpotImage`."""
+    return spot_image.xx, spot_image.yy
+
+
 def find_centroid(spot_image: SpotImage) -> tuple[SpotImage, tuple[float, float]]:
     """
     计算光斑图像的质心坐标。
@@ -32,8 +37,9 @@ def find_centroid(spot_image: SpotImage) -> tuple[SpotImage, tuple[float, float]
     total_intensity = np.sum(image_data)
 
     # 计算质心的x和y坐标
-    x_centroid = np.sum(image_data * image_data.xv) / total_intensity
-    y_centroid = np.sum(image_data * image_data.yv) / total_intensity
+    xx, yy = _get_coordinate_grids(spot_image)
+    x_centroid = np.sum(image_data * xx) / total_intensity
+    y_centroid = np.sum(image_data * yy) / total_intensity
 
     return image_data, (x_centroid, y_centroid)
 
@@ -64,13 +70,14 @@ def calculate_beam_width(spot_image: SpotImage) -> tuple[SpotImage, dict]:
     total_power = np.sum(image_data)
     
     # 计算质心（一阶矩）
-    x_centroid = np.sum(image_data * image_data.xv) / total_power
-    y_centroid = np.sum(image_data * image_data.yv) / total_power
+    xx, yy = _get_coordinate_grids(spot_image)
+    x_centroid = np.sum(image_data * xx) / total_power
+    y_centroid = np.sum(image_data * yy) / total_power
     
     # 计算二阶中心矩
-    sigma_x_sq = np.sum(image_data * (image_data.xv - x_centroid)**2) / total_power
-    sigma_y_sq = np.sum(image_data * (image_data.yv - y_centroid)**2) / total_power
-    sigma_xy_sq = np.sum(image_data * (image_data.xv - x_centroid) * (image_data.yv - y_centroid)) / total_power
+    sigma_x_sq = np.sum(image_data * (xx - x_centroid)**2) / total_power
+    sigma_y_sq = np.sum(image_data * (yy - y_centroid)**2) / total_power
+    sigma_xy_sq = np.sum(image_data * (xx - x_centroid) * (yy - y_centroid)) / total_power
     
     # 按照ISO 11146标准定义的光束宽度（直径）
     d_x = 4 * np.sqrt(sigma_x_sq)
@@ -227,12 +234,13 @@ def encircled_energy(spot_image: SpotImage, max_radius: Optional[float] = None) 
     
     # 计算质心
     total_intensity = np.sum(image_data)
-    x_centroid = np.sum(image_data * image_data.xv) / total_intensity
-    y_centroid = np.sum(image_data * image_data.yv) / total_intensity
+    xx, yy = _get_coordinate_grids(spot_image)
+    x_centroid = np.sum(image_data * xx) / total_intensity
+    y_centroid = np.sum(image_data * yy) / total_intensity
     
     # 创建相对于质心的坐标网格
-    x_coords = image_data.xv - x_centroid
-    y_coords = image_data.yv - y_centroid
+    x_coords = xx - x_centroid
+    y_coords = yy - y_centroid
     
     # 计算每个像素的径向距离
     radii_map = np.sqrt(x_coords**2 + y_coords**2)
@@ -242,8 +250,9 @@ def encircled_energy(spot_image: SpotImage, max_radius: Optional[float] = None) 
         max_radius = np.sqrt(np.max(x_coords)**2 + np.max(y_coords)**2)
     
     # 创建半径数组
-    radius_steps = int(max_radius / np.min([np.diff(image_data.xv[0, :]).mean(), 
-                                           np.diff(image_data.yv[:, 0]).mean()]))
+    dx = np.diff(np.arange(nx)).mean() if nx > 1 else 1.0
+    dy = np.diff(np.arange(ny)).mean() if ny > 1 else 1.0
+    radius_steps = max(2, int(max_radius / np.min([dx, dy])))
     radius_array = np.linspace(0, max_radius, radius_steps)
     
     # 计算每个半径的包围能量

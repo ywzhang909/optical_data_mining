@@ -1,0 +1,12 @@
+{
+  "source": {
+    "type": "video_file",
+    "path": "./data/spot_video.mp4",
+    "frame_step": 5,
+    "max_frames": 100
+  },
+  "steps": [
+    {"name": "d4sigma", "input": "image", "output": "moments"},
+    {"name": "uniformity", "input": "image", "params": {"center": ["$moments.center_x", "$moments.center_y"]}}
+  ]
+}

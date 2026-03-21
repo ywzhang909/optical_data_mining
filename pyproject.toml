@@ -1,9 +1,13 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "data-miner"
 version = "0.1.0"
-description = "Add your description here"
+description = "Optical and laser beam data analysis toolkit."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 dependencies = [
     "fastapi==0.104.1",
     "httpx>=0.28.1",
@@ -17,7 +21,6 @@ dependencies = [
     "pandas>=2.3.0",
     "plotly>=6.1.2",
     "pydantic==2.4.2",
-    "pytest==7.4.3",
     "pygwalker>=0.4.9.15",
     "pymysql",
     "scikit-learn>=1.7.0",
@@ -28,7 +31,6 @@ dependencies = [
     "nbstripout>=0.8.2",
     "swanlab>=0.7.5",
     "swifter>=1.4.0",
-    "statsmodels>=0.14.6",
     "runcell>=0.1.14",
     "scikit-image>=0.26.0",
     "statsmodels>=0.14.6",
@@ -37,11 +39,32 @@ dependencies = [
     "ryven>=3.5.0",
     "polars>=1.36.1",
 ]
+authors = [{ name = "Optical Data Mining Contributors" }]
+keywords = ["optics", "laser", "beam-analysis", "image-processing", "data-mining"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "License :: OSI Approved :: MIT License",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering",
+]
 
 [dependency-groups]
 dev = [
     "ipykernel>=6.29.5",
+    "pytest==7.4.3",
 ]
+
+[project.optional-dependencies]
+dev = ["ipykernel>=6.29.5", "pytest==7.4.3"]
+workflow = ["pyyaml>=6.0", "prefect>=3.0"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["data_mining*", "utils*"]
 
 [[tool.uv.index]]
 url = "https://pypi.tuna.tsinghua.edu.cn/simple"

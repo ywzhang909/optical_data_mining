@@ -36,6 +36,8 @@ dependencies = [
     "dotenv>=0.9.9",
     "ryven>=3.5.0",
     "polars>=1.36.1",
+    "bm3d>=4.0.0",
+    "PyWavelets>=1.4.0",
 ]
 
 [dependency-groups]
@@ -46,3 +48,12 @@ dev = [
 [[tool.uv.index]]
 url = "https://pypi.tuna.tsinghua.edu.cn/simple"
 default = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]

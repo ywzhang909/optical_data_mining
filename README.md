@@ -1,17 +1,22 @@
 # 数字光学数据分析
 
-一个全面的激光光束质量分析工具包，支持功率数据分析、光束特征提取、光学质量评估和时间序列分析。
+一个全面的激光光束质量分析工具包，支持功率数据分析，光束特征提取，光学质量评估和时间序列分析。
 
 ## 🚀 主要功能
 
 ### 1. 功率数据分析
-- **双Sigmoid脉冲拟合**：适用于激光脉冲、光开关响应等带上升沿和下降沿的功率曲线
+- **双Sigmoid脉冲拟合**：适用于激光脉冲，光开关响应等带上升沿和下降沿的功率曲线
 - **上升/下降时间计算**：10%-90%幅度时间的精确测量
-- **时间序列拟合**：支持多种拟合模型（高斯、双误差函数等）
+- **时间序列拟合**：支持多种拟合模型（高斯，双误差函数等）
 
 ### 2. 图像处理与分析
 - **TIFF图像处理**：高效的TIFF格式图像读取和预处理
-- **去噪算法**：中值滤波、最小值滤波等多种去噪方法
+- **图像降噪算法**：
+  - BM3D：先进的块匹配3D滤波算法
+  - 高斯/中值/双边滤波：经典降噪方法
+  - 非局部均值(NLMeans)：保持纹理的降噪
+  - 小波去噪：多尺度分析降噪
+  - 全变分/维纳滤波
 - **背景扣除**：自动暗场校正
 - **质心计算**：基于强度加权的高精度质心定位
 
@@ -37,194 +42,246 @@
 - **相位相关法**：亚像素精度的图像位移计算
 - **光流分析**：光斑运动轨迹追踪
 
+## 🔄 光斑图像处理Pipeline流程
+
+```mermaid
+flowchart TD
+    subgraph 输入["📥 输入阶段"]
+        A1[TIF图像文件] --> A2[读取TIFF]
+        A3[功率计数据] --> A4[读取TXT]
+    end
+
+    subgraph 预处理["🔧 预处理阶段"]
+        B1[图像数据] --> B2[降噪处理]
+        B2 --> B3[背景扣除]
+        B3 --> B4[暗场校正]
+    end
+
+    subgraph 降噪["🧹 降噪模块"]
+        C1[BM3D算法]
+        C2[高斯滤波]
+        C3[中值滤波]
+        C4[NLMeans]
+        C5[双边滤波]
+        C6[小波去噪]
+        
+        B1 -.-> C1
+        B1 -.-> C2
+        B1 -.-> C3
+        B1 -.-> C4
+        B1 -.-> C5
+        B1 -.-> C6
+        
+        C1 --> C7[去噪图像]
+        C2 --> C7
+        C3 --> C7
+        C4 --> C7
+        C5 --> C7
+        C6 --> C7
+    end
+
+    subgraph 特征提取["📊 特征提取"]
+        D1[质心计算] --> D5[特征数据]
+        D2[D4σ直径] --> D5
+        D3[高斯拟合] --> D5
+        D4[椭圆拟合] --> D5
+        C7 --> D1
+        C7 --> D2
+        C7 --> D3
+        C7 --> D4
+    end
+
+    subgraph 质量评估["📈 质量评估"]
+        E1[Strehl比] --> E5[评估报告]
+        E2[BPP计算] --> E5
+        E3[均匀度分析] --> E5
+        E4[环围能量] --> E5
+        D5 --> E1
+        D5 --> E2
+        D5 --> E3
+        D5 --> E4
+    end
+
+    subgraph 输出["📤 输出阶段"]
+        F1[Parquet文件]
+        F2[CSV文件]
+        F3[图表PNG/PDF]
+        E5 --> F1
+        E5 --> F2
+        E5 --> F3
+    end
+
+    style C1 fill:#e1f5fe
+    style C2 fill:#e1f5fe
+    style C3 fill:#e1f5fe
+    style C4 fill:#e1f5fe
+    style C5 fill:#e1f5fe
+    style C6 fill:#e1f5fe
+    style C7 fill:#b3e5fc
+```
+
+### 降噪算法选择指南
+
+| 场景 | 推荐算法 | 特点 |
+|------|---------|------|
+| 高质量降噪 | BM3D | 最佳效果，计算较慢 |
+| 实时处理 | 高斯滤波 | 速度快，效果一般 |
+| 去除椒盐噪声 | 中值滤波 | 快速，保持边缘 |
+| 保持纹理 | NLMeans | 效果好，速度较慢 |
+| 边缘保持 | 双边滤波 | 保持边缘，速度慢 |
+| 多尺度分析 | 小波去噪 | 适合特定场景 |
+
 ## 📁 项目结构
 
 ```
 ├── src/data_mining/
 │   ├── fitting/
-│   │   └── fit_funcs.py          # 拟合函数（DoubleErfPulse, DoubleSigmoid等）
+│   │   └── fit_funcs.py          # 拟合函数
 │   ├── image/
-│   │   ├── common.py             # 通用图像处理函数
-│   │   ├── process.py            # 图像处理流程
-│   │   └── zernike.py            # Zernike多项式拟合
+│   │   ├── common.py             # 通用图像处理
+│   │   ├── denoising.py         # 图像降噪模块 ⭐
+│   │   ├── process.py           # 图像处理流程
+│   │   └── zernike.py           # Zernike多项式
+│   ├── experiment_analysis/
+│   │   ├── denoise_processor.py # Pipeline降噪集成
+│   │   └── pipeline.py          # 处理Pipeline
 │   └── services/
-│       └── spots_service.py      # 光斑分析服务
+│       └── spots_service.py
 ├── notebooks/
-│   ├── data.ipynb                # 主要数据分析notebook
-│   ├── zernike_fit_near_spot.ipynb # Zernike拟合示例
-│   └── atmosphere_analysis.ipynb # 大气分析
-├── utils/
-│   ├── file_utils.py             # 文件处理工具
-│   ├── light_spots_utils.py      # 光斑分析工具
-│   └── render_utils.py           # 渲染工具
-└── tests/                        # 测试文件
+├── tests/
+│   ├── test_denoising.py        # 降噪测试
+│   └── test_denoise_pipeline.py  # Pipeline测试
+└── doc/
 ```
 
 ## 🛠 安装与依赖
 
 ### 系统要求
-- Python 3.8+
+- Python 3.12+
 - Windows/Linux/macOS
 
-### 主要依赖
-```
-numpy>=1.21.0
-pandas>=1.3.0
-scipy>=1.7.0
-opencv-python>=4.5.0
-matplotlib>=3.5.0
-scikit-learn>=1.0.0
-statsmodels>=0.13.0
-Pillow>=8.3.0
-swifter>=1.1.0
+### 安装
+```bash
+# 基础依赖
+pip install numpy opencv-python
+
+# 完整功能（推荐）
+pip install numpy opencv-python bm3d PyWavelets scikit-image
 ```
 
-### 安装步骤
-1. 克隆项目到本地
-2. 安装依赖：
-   ```bash
-   pip install -r requirements.txt
-   ```
-3. 确保所有依赖项正确安装
+### 依赖项
+- **必选**: numpy, opencv-python, polars, pandas
+- **可选**: 
+  - `bm3d` - BM3D降噪算法
+  - `PyWavelets` - 小波变换
+  - `scikit-image` - 图像质量评估(SSIM)
 
 ## 📖 使用指南
 
-### 快速开始
+### 图像降噪
 
-1. **数据准备**
-   - 将TIFF格式的光束图像放在指定目录
-   - 准备功率计数据文件（支持TXT格式）
-   - 确保时间戳格式正确
-
-2. **运行分析**
-   ```python
-   # 在Jupyter Notebook中
-   import sys
-   sys.path.append('../src')
-   
-   from data_mining.image.common import get_profiles
-   from data_mining.fitting.fit_funcs import DoubleErfPulse
-   
-   # 执行数据分析
-   ```
-
-3. **主要分析流程**
-   - 功率数据拟合：`DoubleErfPulse` 或 `DoubleSigmoid`
-   - 图像特征提取：`d4sigma_feature_extract()`
-   - 光学质量计算：`strehl_with_centering()`
-   - BPP计算：`calculate_bpp_from_pupil_and_focal()`
-
-### 核心API
-
-#### 功率拟合
 ```python
-from data_mining.fitting.fit_funcs import DoubleErfPulse
+from data_mining.image.denoising import (
+    denoise,           # 统一入口
+    bm3d_denoise,     # 快速函数
+    gaussian_denoise,
+    median_denoise,
+    nlmeans_denoise,
+    DenoiseMethod
+)
 
-# 创建拟合对象
-fit = DoubleErfPulse(power_data)
-# 执行拟合
-params = fit.fit()
-# 获取上升/下降时间
-rise_time = fit.rise_time
-fall_time = fit.fall_time
+# 方法1: 使用统一入口
+result = denoise(image, 'bm3d', sigma_psd=25)
+denoised = result.image
+
+# 方法2: 使用快速函数
+result = bm3d_denoise(image, sigma_psd=25)
+result = gaussian_denoise(image, kernel_size=5, sigma=1.5)
+
+# 方法3: 使用枚举
+result = denoise(image, DenoiseMethod.NLMEANS, h=10)
 ```
 
-#### 光束特征提取
-```python
-from data_mining.image.common import get_profiles, d4sigma
+### Pipeline集成
 
-# 提取光束截面
-profiles = get_profiles(image_array, center=(cx, cy))
-# 计算D4σ直径
-d4sigma_features = d4sigma(image_array)
+```python
+from data_mining.experiment_analysis import (
+    PipelineManager,
+    PipelineStage,
+    ImageDenoiseProcessor,
+    DenoiseProcessorConfig
+)
+
+# 配置Pipeline
+config = PipelineExecutionConfig(
+    stages=[
+        PipelineStageConfig(
+            stage_name=PipelineStage.DENOISE,
+            processor_type=ImageDenoiseProcessor
+        )
+    ]
+)
+
+manager = PipelineManager(config)
+result = PipelineExecutor(manager).execute({'images': images})
 ```
 
-#### Strehl比计算
+### 光束特征提取
+
 ```python
-from data_mining.image.common import strehl_with_centering
+from data_mining.image.common import (
+    read_tiff_to_numpy,
+    get_profiles,
+    d4sigma
+)
 
-result = strehl_with_centering(pupil_image, focal_image)
-strehl_ratio = result['strehl']
+# 读取图像
+image = read_tiff_to_numpy('beam.tif')
+
+# 降噪
+from data_mining.image.denoising import gaussian_denoise
+denoised = gaussian_denoise(image, kernel_size=5)
+
+# 提取特征
+features = d4sigma(denoised)
+profiles = get_profiles(denoised, center=(cx, cy))
 ```
-
-## 🔬 分析对象
-
-### 1. 光轴Image（焦平面）
-- **质心分析**：光轴抖动频谱、光强比较
-- **高斯拟合**：光束半径测量
-- **椭圆拟合**：形心、半径、角度分析
-- **BPP计算**：X、Y方向光束质量
-- **Strehl比**：近场光斑与理想光斑比较
-
-### 2. 光瞳Image（出瞳平面）
-- **均匀度分析**：RMS均匀度、变异系数
-- **平顶拟合**：erf边界平顶函数拟合
-- **环围能量**：指定能量百分比半径计算
-
-### 3. 功率计数据
-- **稳定功率分析**：最大功率、激光器功率比较
-- **脉冲特性**：半功率时间、上升/下降沿分析
-
-### 4. 波前数据
-- **波前RMS**：包含/不包含倾斜离焦的分析
-- **Zernike拟合**：多项式波前重建
-- **频谱分析**：波前误差频域特性
-
-## 📊 结果展示
-
-### 可视化功能
-- **实时绘图**：matplotlib集成的动态图表
-- **统计分析**：多维度统计特征计算
-- **趋势分析**：时间序列趋势和周期性展示
-- **频谱分析**：功率谱密度和主频率识别
-
-### 导出格式
-- **Parquet**：高效的数据存储格式
-- **CSV**：通用数据交换格式
-- **图表**：PNG/PDF格式的图表导出
 
 ## 🧪 测试
 
-运行测试套件：
 ```bash
+# 运行所有测试
 python -m pytest tests/ -v
+
+# 仅运行降噪测试
+python -m pytest tests/test_denoising.py -v
+
+# 仅运行Pipeline测试
+python -m pytest tests/test_denoise_pipeline.py -v
 ```
 
-## 📚 文档
+## 📚 API速查
 
-详细文档请参考：
-- [`doc/光束质量分析.md`](doc/光束质量分析.md) - 光束质量分析原理
-- [`doc/接口文档.md`](doc/接口文档.md) - API接口说明
-- [`notebooks/`](notebooks/) - 示例notebook
+### 降噪模块
 
-## 🤝 贡献
+| 函数 | 说明 | 关键参数 |
+|-----|------|---------|
+| `denoise()` | 统一入口 | method, **kwargs |
+| `bm3d_denoise()` | BM3D降噪 | sigma_psd, stage |
+| `gaussian_denoise()` | 高斯滤波 | kernel_size, sigma |
+| `median_denoise()` | 中值滤波 | kernel_size |
+| `nlmeans_denoise()` | 非局部均值 | h, template, search |
+| `bilateral_denoise()` | 双边滤波 | d, sigma_color, sigma_space |
+| `wavelet_denoise()` | 小波去噪 | wavelet, level |
+| `estimate_noise_sigma()` | 噪声估计 | method |
 
-欢迎提交Issue和Pull Request来改进项目。
+### 质量评估
+
+| 函数 | 说明 |
+|-----|------|
+| `evaluate_denoising()` | PSNR/SSIM评估 |
+| `QualityMetrics` | 质量指标数据类 |
 
 ## 📄 许可证
 
-本项目采用MIT许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
-
-## 🆘 常见问题
-
-### Q: 导入错误怎么办？
-A: 确保正确设置Python路径：
-```python
-sys.path.append('../src')
-```
-
-### Q: TIFF文件读取失败？
-A: 检查文件格式和权限，确保使用正确的文件路径。
-
-### Q: 拟合效果不好？
-A: 调整初始参数或检查数据质量，确保信号具有足够的信噪比。
-
-## 📞 联系信息
-
-如有问题，请通过以下方式联系：
-- 创建GitHub Issue
-- 发送邮件至项目维护者
-
----
-
-**注意**：本工具包专为激光光束质量分析设计，使用前请确保理解相关光学原理和测量方法。
+MIT License - 查看 LICENSE 文件了解详情。

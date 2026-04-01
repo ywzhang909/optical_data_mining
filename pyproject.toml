@@ -38,6 +38,7 @@ dependencies = [
     "polars>=1.36.1",
     "bm3d>=4.0.0",
     "PyWavelets>=1.4.0",
+    "aotools>=1.0.7",
 ]
 
 [dependency-groups]
@@ -45,9 +46,6 @@ dev = [
     "ipykernel>=6.29.5",
 ]
 
-[[tool.uv.index]]
-url = "https://pypi.tuna.tsinghua.edu.cn/simple"
-default = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

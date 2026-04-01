@@ -204,6 +204,18 @@ def convert_to_cv(image_array):
     image_array = normalize_data(image_array, min_val=0, max_val=255)
     return (image_array * 255).astype(np.uint8)
 
+def crop_to_square(img):
+    _img = np.array(img)
+    h,w  = _img.shape
+    if h == w:
+        return _img
+    elif h > w:
+        crop_boarder = (h-w)//2
+        return _img[crop_boarder:-crop_boarder, :]
+    else:
+        crop_boarder = (w-h)//2
+        return _img[:, crop_boarder:-crop_boarder]
+
 class Image2D:
 
     def __init__(self, image_array):

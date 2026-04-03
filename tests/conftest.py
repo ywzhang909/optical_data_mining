@@ -20,6 +20,10 @@ sys.path.insert(0, str(IMAGE_PATH))
 EXPERIMENT_ANALYSIS_PATH = SRC_PATH / "experiment_analysis"
 sys.path.insert(0, str(EXPERIMENT_ANALYSIS_PATH))
 
+# Add the tests directory path for synthetic_beam_generator
+TESTS_PATH = Path(__file__).parent
+sys.path.insert(0, str(TESTS_PATH))
+
 # =============================================================================
 # Fixtures - Synthetic Beam Images
 # =============================================================================

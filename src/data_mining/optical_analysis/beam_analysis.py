@@ -1,0 +1,286 @@
+"""
+光束质量分析模块
+=================
+提供光斑分析和光束质量评估的核心算法
+
+功能:
+- D4σ直径计算（一阶矩和二阶矩）
+- PIB占比计算
+- 高斯拟合直径
+- BPP (Beam Parameter Product) 计算
+- 斯特列尔比(Strehl Ratio) 计算辅助
+"""
+
+import numpy as np
+from scipy.ndimage import center_of_mass
+from scipy.optimize import curve_fit
+from typing import Dict, Tuple, Optional, Any
+
+
+def gaussian(x: np.ndarray, mu: float, sigma: float, A: float, b: float) -> np.ndarray:
+    """
+    高斯函数
+    
+    Args:
+        x: 自变量数组
+        mu: 中心位置
+        sigma: 标准差
+        A: 振幅
+        b: 基线偏移
+    
+    Returns:
+        高斯函数值数组
+    """
+    return A * np.exp(-(x - mu) ** 2 / (2 * sigma ** 2)) + b
+
+
+def fitting_gaussian(data: np.ndarray) -> Tuple[Tuple[float, float, float, float], Any]:
+    """
+    拟合高斯函数
+    
+    Args:
+        data: 输入一维数据数组
+    
+    Returns:
+        (mu, sigma, A, b): 拟合参数元组
+        covariance: 协方差矩阵
+    """
+    x_data = np.arange(len(data))
+    initial_guess = [np.argmax(data), 10, np.max(data), 0]
+    try:
+        (mu, sigma, A, b), covariance = curve_fit(gaussian, x_data, data, p0=initial_guess)
+        return (mu, sigma, A, b), covariance
+    except RuntimeError:
+        return (np.nan, np.nan, np.nan, np.nan), np.nan
+
+
+def d4sigma(img: np.ndarray, pixel_size_um: float = 1.0) -> Dict[str, float]:
+    """
+    计算图像的 D4σ 直径（一阶矩和二阶矩）
+    
+    Args:
+        img: 输入图像（2D数组）
+        pixel_size_um: 像素尺寸（微米）
+    
+    Returns:
+        dict: 包含中心坐标和直径的字典
+            - center_x: 质心X坐标
+            - center_y: 质心Y坐标
+            - D_x: X方向直径 (μm)
+            - D_y: Y方向直径 (μm)
+            - avg_sigma2: 平均直径 (μm)
+            - center_intensity: 中心强度
+    """
+    total = img.sum()
+    if total == 0:
+        return {
+            'center_x': 0,
+            'center_y': 0,
+            'D_x': 0,
+            'D_y': 0,
+            'avg_sigma2': 0,
+            'center_intensity': 0,
+        }
+    
+    cy, cx = center_of_mass(img)
+    # 安全转换为标量浮点数
+    try:
+        cx = float(np.ravel(np.asarray(cx))[0])
+        cy = float(np.ravel(np.asarray(cy))[0])
+    except (TypeError, IndexError, ValueError):
+        cx, cy = float(cx), float(cy)
+    h, w = img.shape
+    y, x = np.mgrid[0:h, 0:w]
+    
+    # 二阶中心矩（光强加权）
+    mu_xx = np.sum((x - cx)**2 * img) / total  # σ_x²
+    mu_yy = np.sum((y - cy)**2 * img) / total  # σ_y²
+    Dx = 4 * np.sqrt(max(mu_xx, 0)) * pixel_size_um
+    Dy = 4 * np.sqrt(max(mu_yy, 0)) * pixel_size_um
+    
+    # 安全获取中心强度
+    cy_int = int(round(cy))
+    cx_int = int(round(cx))
+    if 0 <= cy_int < h and 0 <= cx_int < w:
+        center_intensity = float(img[cy_int, cx_int])
+    else:
+        center_intensity = 0.0
+    
+    return {
+        'center_x': cx,
+        'center_y': cy,
+        'D_x': float(Dx),
+        'D_y': float(Dy),
+        'avg_sigma2': float(np.sqrt(Dx * Dy)),
+        'center_intensity': center_intensity,
+    }
+
+
+def pib_ratio(img: np.ndarray, center: Tuple[float, float], r: float = 5.0) -> float:
+    """
+    计算 PIB 占比 (Power In Bucket)
+    
+    Args:
+        img: 输入图像（2D数组）
+        center: 中心坐标 (x, y)
+        r: 半径（默认5.0像素）
+    
+    Returns:
+        float: PIB 占比 (0-1之间)
+    """
+    cx, cy = center
+    h, w = img.shape
+    y, x = np.mgrid[0:h, 0:w]
+    mask = (x - cx)**2 + (y - cy)**2 <= r**2
+    pib_intensity = img[mask].sum()
+    total_intensity = img.sum()
+    if total_intensity == 0:
+        return 0.0
+    return pib_intensity / total_intensity
+
+
+def calculate_xy_diameters(
+    image: np.ndarray, 
+    center_x: float, 
+    center_y: float, 
+    pix_size: float = 1.0
+) -> Dict[str, float]:
+    """
+    计算x和y方向的高斯直径
+    
+    Args:
+        image: 输入图像（2D数组）
+        center_x: 中心X坐标
+        center_y: 中心Y坐标
+        pix_size: 像素尺寸
+    
+    Returns:
+        dict: 包含x和y方向直径的字典
+            - gaussian_dia_x(um): X方向高斯直径 (μm)
+            - gaussian_dia_y(um): Y方向高斯直径 (μm)
+    """
+    # 提取x和y方向的数据
+    y_data = image[:, int(center_x)]
+    x_data = image[int(center_y), :]
+    
+    # 计算x方向直径
+    (mu, sigma, A, b), conv = fitting_gaussian(x_data)
+    x_diameter = 2 * sigma * pix_size if not np.isnan(sigma) else 0
+    
+    # 计算y方向直径
+    (mu, sigma, A, b), conv = fitting_gaussian(y_data)
+    y_diameter = 2 * sigma * pix_size if not np.isnan(sigma) else 0
+    
+    return {'gaussian_dia_x(um)': x_diameter, 'gaussian_dia_y(um)': y_diameter}
+
+
+def calculate_bpp(
+    pupil_diameter_mm: float, 
+    focal_diameter_mm: float, 
+    focal_length_mm: float = 3000
+) -> Dict[str, float]:
+    """
+    计算BPP (Beam Parameter Product)
+    
+    Args:
+        pupil_diameter_mm: 出瞳直径 (mm)
+        focal_diameter_mm: 焦斑直径 (mm)
+        focal_length_mm: 透镜焦距 (mm)
+    
+    Returns:
+        dict: BPP结果
+            - BPP_mm_mrad: 光束参数乘积
+            - divergence_mrad: 发散角 (mrad)
+    """
+    w_pupil = pupil_diameter_mm / 2.0
+    w_focal = focal_diameter_mm / 2.0
+    f = focal_length_mm
+    
+    theta_rad = w_focal / f
+    theta_mrad = theta_rad * 1000.0
+    bpp_mm_mrad = w_pupil * theta_mrad
+    
+    return {
+        "BPP_mm_mrad": bpp_mm_mrad,
+        "divergence_mrad": theta_mrad,
+    }
+
+
+def calculate_m2(bpp_mm_mrad: float, wavelength_um: float) -> float:
+    """
+    计算M²光束质量因子
+    
+    Args:
+        bpp_mm_mrad: 光束参数乘积
+        wavelength_um: 波长 (微米)
+    
+    Returns:
+        float: M²值
+    """
+    bpp_diffraction = wavelength_um / np.pi
+    return bpp_mm_mrad / bpp_diffraction
+
+
+def calculate_centroid(img: np.ndarray) -> Tuple[float, float]:
+    """
+    计算图像的质心
+    
+    Args:
+        img: 输入图像（2D数组）
+    
+    Returns:
+        tuple: (center_x, center_y) 质心坐标
+    """
+    total = img.sum()
+    if total == 0:
+        return (0.0, 0.0)
+    
+    cy, cx = center_of_mass(img)
+    try:
+        cx = float(np.ravel(np.asarray(cx))[0])
+        cy = float(np.ravel(np.asarray(cy))[0])
+    except (TypeError, IndexError, ValueError):
+        cx, cy = float(cx), float(cy)
+    
+    return (cx, cy)
+
+
+def extract_beam_features(
+    img: np.ndarray,
+    pixel_size_um: float = 1.0,
+    pib_radius: float = 5.0
+) -> Dict[str, Any]:
+    """
+    提取完整的光束特征
+    
+    Args:
+        img: 输入图像（2D数组）
+        pixel_size_um: 像素尺寸（微米）
+        pib_radius: PIB计算半径
+    
+    Returns:
+        dict: 包含所有光束特征的字典
+    """
+    # D4σ特征
+    d4s_features = d4sigma(img, pixel_size_um)
+    
+    # 质心
+    centroid = (d4s_features['center_x'], d4s_features['center_y'])
+    
+    # PIB占比
+    pib = pib_ratio(img, centroid, pib_radius)
+    
+    # 高斯拟合直径
+    gaussian_dia = calculate_xy_diameters(
+        img, 
+        d4s_features['center_x'], 
+        d4s_features['center_y'],
+        pixel_size_um
+    )
+    
+    return {
+        'centroid': centroid,
+        'd4s': d4s_features,
+        'pib_ratio': pib,
+        'gaussian_diameter': gaussian_dia,
+    }

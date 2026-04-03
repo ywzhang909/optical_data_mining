@@ -34,7 +34,7 @@ dependencies = [
     "statsmodels>=0.14.6",
     "sqlalchemy>=2.0.45",
     "dotenv>=0.9.9",
-    "ryven>=3.5.0",
+    "ryven>=3.4.0",
     "polars>=1.36.1",
     "bm3d>=4.0.0",
     "PyWavelets>=1.4.0",
@@ -55,3 +55,13 @@ markers = [
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["data_mining"]
+
+[tool.setuptools.package-dir]
+data_mining = "src/data_mining"

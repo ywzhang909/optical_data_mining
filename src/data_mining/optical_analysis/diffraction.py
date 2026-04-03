@@ -12,6 +12,8 @@
 import numpy as np
 from typing import Tuple, Optional
 
+from loguru import logger
+
 
 def crop_to_square(img: np.ndarray) -> np.ndarray:
     """
@@ -66,6 +68,86 @@ def shift_to_center_fft(image: np.ndarray, cx: float, cy: float) -> np.ndarray:
     return crop_to_square(shifted)
 
 
+import numpy as np
+from typing import Optional, Tuple
+
+def suggest_output_grid_for_focusing(
+    wavelength: float,
+    focal_length: Optional[float] = None,
+    NA: Optional[float] = None,
+    f_number: Optional[float] = None,
+    input_aperture_diameter: Optional[float] = None,
+    pixels_per_min_feature: int = 3,
+    num_pixels: int = 1024,
+) -> Tuple[float, float]:
+    """
+    根据 NA、f/# 或焦距+孔径，自动建议聚焦仿真的输出像素尺寸和物理视场半宽。
+    
+    参数:
+        wavelength (float): 波长 λ (米)
+        focal_length (float, optional): 透镜焦距 f (米)
+        NA (float, optional): 数值孔径，NA = n * sin(θ)，空气中 n≈1
+        f_number (float, optional): f/# = f / D
+        input_aperture_diameter (float, optional): 入瞳直径 D (米)
+        pixels_per_min_feature (int): 每个最小光斑特征（如艾里斑半高宽）的像素数，建议 2~4
+        num_pixels (int): 输出阵列总像素数（单边），用于计算总视场
+    
+    返回:
+        output_pixel_size (float): 推荐的输出平面像素尺寸 (米)
+        half_FOV (float): 推荐的输出平面半视场（即从中心到边缘的物理距离，米）
+    """
+    # Step 1: 确定 NA
+    if NA is not None:
+        pass
+    elif f_number is not None:
+        # 对于小角度，NA ≈ 1 / (2 * f/#)
+        NA = 1.0 / (2 * f_number)
+    elif focal_length is not None and input_aperture_diameter is not None:
+        # NA = sin(arctan(D/(2f))) ≈ D/(2f) 当 D << f
+        NA = np.sin(np.arctan(input_aperture_diameter / (2 * focal_length)))
+    else:
+        raise ValueError("Must provide one of: NA, f_number, or (focal_length + input_aperture_diameter)")
+
+    assert NA
+    if NA <= 0 or NA >= 1.0:
+        raise ValueError(f"Invalid NA: {NA}. Should be in (0, ~0.95) for air.")
+
+    # Step 2: 计算衍射极限光斑尺寸
+    # 艾里斑第一零点半径（Airy disk radius to first zero）:
+    airy_radius = 1.22 * wavelength / (2 * NA)   # = 0.61 * λ / NA
+
+    # 半高全宽（FWHM）近似（对 Airy pattern）:
+    airy_fwhm = 0.514 * wavelength / NA          # 经验公式
+
+    # 或者对高斯光束（理想聚焦）: w0 = λ * f / (π * w_in) = λ / (π * NA) （当 NA 小时）
+    gaussian_waist = wavelength / (np.pi * NA)
+
+    # 我们取最严格的（最小的特征尺寸）作为参考
+    min_feature_size = min(airy_fwhm, gaussian_waist)
+
+    # Step 3: 根据奈奎斯特采样确定像素尺寸
+    # 至少每 min_feature_size 有 `pixels_per_min_feature` 个像素
+    output_pixel_size = min_feature_size / pixels_per_min_feature
+
+    # Step 4: 确定视场（FOV）
+    # 建议视场至少覆盖 3~5 倍艾里斑半径，以看到旁瓣
+    FOV_radius = 3 * airy_radius  # 半视场（从中心到边缘）
+
+    # 但也要确保 FOV 能被 num_pixels 整除
+    # 实际半视场 = (num_pixels // 2) * output_pixel_size
+    actual_half_FOV = (num_pixels // 2) * output_pixel_size
+
+    # 如果实际 FOV 太小，扩大像素尺寸以覆盖所需视场
+    if actual_half_FOV < FOV_radius:
+        # 重新设定 output_pixel_size 以覆盖 FOV_radius
+        output_pixel_size = FOV_radius / (num_pixels // 2)
+        # 注意：此时采样率可能略低于理想，但保证视场完整
+
+    half_FOV = (num_pixels // 2) * output_pixel_size
+
+    return output_pixel_size, half_FOV
+
+
 def fnr3(
     Ex: np.ndarray,
     input_pixel_size: float,
@@ -88,47 +170,61 @@ def fnr3(
     返回:
         输出光场复振幅
     """
+    if zz <= 0:
+        raise ValueError("Propagation distance zz must be positive.")
+    
     dx1 = input_pixel_size
     dy1 = dx1
     dx2 = output_pixel_size
     dy2 = dx2
 
     k0 = 2 * np.pi / lambda_m
+    Ny, Nx = Ex.shape
 
-    Ny1, Nx1 = Ex.shape
-    Ny2, Nx2 = Ex.shape
+    # 输入平面坐标（中心对齐）
+    x1v = (np.arange(Nx) - Nx // 2) * dx1
+    y1v = (np.arange(Ny) - Ny // 2) * dy1
 
-    # 输入平面坐标
-    x1v = (np.arange(Nx1) - Nx1 // 2) * dx1
-    y1v = (np.arange(Ny1) - Ny1 // 2) * dy1
+    # 输出平面坐标（同样像素数，但可不同物理尺寸）
+    x2v = (np.arange(Nx) - Nx // 2) * dx2
+    y2v = (np.arange(Ny) - Ny // 2) * dy2
 
-    # 输出平面坐标
-    x2v = (np.arange(Nx2) - Nx2 // 2) * dx2
-    y2v = (np.arange(Ny2) - Ny2 // 2) * dy2
+    # 调试信息
+    logger.debug(f"Input FOV: [{x1v[0]:.6e}, {x1v[-1]:.6e}] m")
+    logger.debug(f"Output FOV: [{x2v[0]:.6e}, {x2v[-1]:.6e}] m")
+    logger.debug(f"Propagation distance: {zz:.6e} m")
+    logger.debug(f"Wavelength: {lambda_m:.6e} m")
+    if focal_length_m is not None:
+        logger.debug(f"Focal length: {focal_length_m:.6e} m")
 
-    # 添加聚焦相位（透镜相位）
+    # 添加聚焦相位（薄透镜模型，精确球面波）
     if focal_length_m is not None and focal_length_m > 0:
-        # 聚焦相位: exp(-i * k * r² / (2f))
         r1_sq = x1v[np.newaxis, :]**2 + y1v[:, np.newaxis]**2
-        lens_phase = np.exp(-1j * k0 * r1_sq / (2 * focal_length_m))
+        phase = (2 * np.pi / lambda_m) * (focal_length_m - np.sqrt(focal_length_m**2 + r1_sq))
+        lens_phase = np.exp(1j * phase)
         Ex = Ex * lens_phase
+        logger.debug(f"Max lens phase shift: {np.max(np.abs(phase)):.3f} rad")
 
-    # 输入平面二次相位因子
+    # 输入二次相位因子
     phase_in = np.exp(1j * k0 / (2 * zz) * (x1v[np.newaxis, :]**2 + y1v[:, np.newaxis]**2))
     Ex_hat = Ex * phase_in
 
-    # y方向傅里叶变换
-    F_y = np.exp(-1j * 2 * np.pi / (lambda_m * zz) * np.outer(y1v, y2v))
-    temp = (F_y.T @ Ex_hat) * dy1
+    # 构建菲涅尔传播核（注意：K = 2π/(λ zz)）
+    K = 2 * np.pi / (lambda_m * zz)
+    F_y = np.exp(-1j * K * np.outer(y1v, y2v))   # shape (Ny, Ny_out) = (Ny, Ny)
+    F_x = np.exp(-1j * K * np.outer(x1v, x2v))   # shape (Nx, Nx_out) = (Nx, Nx)
 
-    # x方向傅里叶变换
-    F_x = np.exp(-1j * 2 * np.pi / (lambda_m * zz) * np.outer(x1v, x2v).T)
-    Ex2 = temp @ F_x
+    # 执行分离变量的菲涅尔积分：Ex2 = F_y^T @ Ex_hat @ F_x
+    temp = F_y.T @ Ex_hat          # (Ny, Ny) @ (Ny, Nx) -> (Ny, Nx)
+    Ex2 = temp @ F_x               # (Ny, Nx) @ (Nx, Nx) -> (Ny, Nx)
 
-    # 输出平面二次相位因子
+    # 输出二次相位因子 + 常数因子
     phase_out = np.exp(1j * k0 * zz + 1j * k0 / (2 * zz) * (x2v[np.newaxis, :]**2 + y2v[:, np.newaxis]**2))
-    Ex2 = Ex2 * phase_out / (1j * lambda_m * zz)
-    
+    Ex2 = Ex2 * phase_out * (dx1 * dy1) / (1j * lambda_m * zz)
+
+    logger.debug(f"Input power: {np.sum(np.abs(Ex)**2) * dx1 * dy1:.6e}")
+    logger.debug(f"Output power: {np.sum(np.abs(Ex2)**2) * dx2 * dy2:.6e}")
+
     return Ex2
 
 
@@ -177,7 +273,7 @@ def calculate_strehl_ratio_with_energy_conservation(
         f_m, 
         wavelength_m,
         focal_length_m=focal_length_m  # 传入聚焦焦距
-    ))
+    ))**2
 
     # 能量守恒校准
     total_energy_actual = np.sum(focus_img)

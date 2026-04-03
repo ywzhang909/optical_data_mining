@@ -220,12 +220,11 @@ def main():
     if denoise_method == 'manual':
         manual_threshold = st.sidebar.number_input("手动阈值", value=100.0, step=1.0)
     
-    pib_radius = st.sidebar.number_input("PIB计算半径 (像素)", value=5.0, step=1.0)
-    
     # 斯特列尔比参数
     st.sidebar.subheader("光学参数")
     wavelength = st.sidebar.number_input("波长 (nm)", value=1064, step=1)
     focal_length = st.sidebar.number_input("焦距 (mm)", value=3000, step=100)
+    aperture_diameter = st.sidebar.number_input("入瞳直径 (mm)", value=100, step=10)
     
     # File upload
     st.header("File Upload")
@@ -291,8 +290,23 @@ def main():
             # PIB ratio
             st.header("PIB Ratio Calculation")
             
-            axis_pib = pib_ratio(axis_denoise, (axis_features['center_x'], axis_features['center_y']), pib_radius)
+            wavelength_m = wavelength * 1e-9
+            focal_length_m = focal_length * 1e-3
+            aperture_diameter_m = aperture_diameter * 1e-3
+            
+            axis_pib, is_overexposed = pib_ratio(
+                axis_denoise,
+                (axis_features['center_x'], axis_features['center_y']),
+                wavelength_m=wavelength_m,
+                focal_length_m=focal_length_m,
+                aperture_diameter_m=aperture_diameter_m,
+                pixel_size_m=axis_pixel,
+            )
             st.metric("光轴 PIB占比", f"{axis_pib:.4f}")
+            if is_overexposed:
+                st.warning("⚠️ 图像可能过曝，PIB占比计算结果可能不准确")
+            if is_overexposed:
+                st.warning("⚠️ 图像可能过曝，PIB占比计算结果可能不准确")
             
             # Gaussian fitting
             st.header("Gaussian Fitting")
@@ -356,11 +370,11 @@ def main():
             col1, col2, col3 = st.columns(3)
             
             with col1:
-                st.plotly_chart(plot_3d_visualization(axis_shifted, "Actual Focus"), use_container_width=True)
+                st.plotly_chart(plot_3d_visualization(axis_shifted, "Actual Focus"), width='stretch')
             with col2:
-                st.plotly_chart(plot_3d_visualization(ideal_matched, "Ideal Focus"), use_container_width=True)
+                st.plotly_chart(plot_3d_visualization(ideal_matched, "Ideal Focus"), width='stretch')
             with col3:
-                st.plotly_chart(plot_3d_visualization(pupil_shifted, "Pupil"), use_container_width=True)
+                st.plotly_chart(plot_3d_visualization(pupil_shifted, "Pupil"), width='stretch')
             
             # BPP calculation
             st.header("BPP (Beam Parameter Product)")

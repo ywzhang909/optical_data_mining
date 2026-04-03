@@ -39,6 +39,7 @@ dependencies = [
     "bm3d>=4.0.0",
     "PyWavelets>=1.4.0",
     "aotools>=1.0.7",
+    "streamlit",
 ]
 
 [dependency-groups]

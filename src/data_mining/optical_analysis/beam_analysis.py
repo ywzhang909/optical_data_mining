@@ -116,27 +116,56 @@ def d4sigma(img: np.ndarray, pixel_size_um: float = 1.0) -> Dict[str, float]:
     }
 
 
-def pib_ratio(img: np.ndarray, center: Tuple[float, float], r: float = 5.0) -> float:
+def pib_ratio(
+    img: np.ndarray,
+    center: Tuple[float, float],
+    wavelength_m: float,
+    focal_length_m: float,
+    aperture_diameter_m: float,
+    pixel_size_m: float,
+) -> Tuple[float, bool]:
     """
     计算 PIB 占比 (Power In Bucket)
+    以质心为圆心，计算半径为衍射极限半径的圆内能量占全部能量的比值
     
     Args:
         img: 输入图像（2D数组）
         center: 中心坐标 (x, y)
-        r: 半径（默认5.0像素）
+        wavelength_m: 波长 (米)
+        focal_length_m: 焦距 (米)
+        aperture_diameter_m: 入瞳直径 (米)
+        pixel_size_m: 像素尺寸 (米)
     
     Returns:
-        float: PIB 占比 (0-1之间)
+        tuple: (pib_ratio, is_overexposed)
+            - pib_ratio: PIB 占比 (0-1之间)
+            - is_overexposed: 是否过曝
     """
     cx, cy = center
     h, w = img.shape
+    
+    # 计算衍射极限半径 (Airy disk radius)
+    # r_airy = 1.22 * λ * f / D (物理尺寸)
+    r_airy_m = 1.22 * wavelength_m * focal_length_m / aperture_diameter_m
+    # 转换为像素
+    r_airy_pixels = r_airy_m / pixel_size_m
+    
     y, x = np.mgrid[0:h, 0:w]
-    mask = (x - cx)**2 + (y - cy)**2 <= r**2
+    mask = (x - cx)**2 + (y - cy)**2 <= r_airy_pixels**2
     pib_intensity = img[mask].sum()
     total_intensity = img.sum()
+    
     if total_intensity == 0:
-        return 0.0
-    return pib_intensity / total_intensity
+        return 0.0, False
+    
+    # 检查是否过曝：如果中心区域像素值接近或达到最大值
+    max_pixel_value = img.max()
+    # 假设16位图像最大值为65535，8位为255
+    bit_depth = 16 if max_pixel_value > 255 else 8
+    max_possible = 65535 if bit_depth == 16 else 255
+    is_overexposed = max_pixel_value >= max_possible * 0.95
+    
+    return pib_intensity / total_intensity, is_overexposed
 
 
 def calculate_xy_diameters(
@@ -248,7 +277,9 @@ def calculate_centroid(img: np.ndarray) -> Tuple[float, float]:
 def extract_beam_features(
     img: np.ndarray,
     pixel_size_um: float = 1.0,
-    pib_radius: float = 5.0
+    wavelength_m: float = 1064e-9,
+    focal_length_m: float = 3.0,
+    aperture_diameter_m: float = 0.1,
 ) -> Dict[str, Any]:
     """
     提取完整的光束特征
@@ -256,7 +287,9 @@ def extract_beam_features(
     Args:
         img: 输入图像（2D数组）
         pixel_size_um: 像素尺寸（微米）
-        pib_radius: PIB计算半径
+        wavelength_m: 波长（米）
+        focal_length_m: 焦距（米）
+        aperture_diameter_m: 入瞳直径（米）
     
     Returns:
         dict: 包含所有光束特征的字典
@@ -267,8 +300,15 @@ def extract_beam_features(
     # 质心
     centroid = (d4s_features['center_x'], d4s_features['center_y'])
     
-    # PIB占比
-    pib = pib_ratio(img, centroid, pib_radius)
+    # PIB占比（使用衍射极限半径）
+    pixel_size_m = pixel_size_um * 1e-6
+    pib, is_overexposed = pib_ratio(
+        img, centroid,
+        wavelength_m=wavelength_m,
+        focal_length_m=focal_length_m,
+        aperture_diameter_m=aperture_diameter_m,
+        pixel_size_m=pixel_size_m,
+    )
     
     # 高斯拟合直径
     gaussian_dia = calculate_xy_diameters(
@@ -282,5 +322,6 @@ def extract_beam_features(
         'centroid': centroid,
         'd4s': d4s_features,
         'pib_ratio': pib,
+        'pib_overexposed': is_overexposed,
         'gaussian_diameter': gaussian_dia,
     }

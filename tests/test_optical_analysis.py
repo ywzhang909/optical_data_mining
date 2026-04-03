@@ -159,26 +159,57 @@ class TestPIBRatio:
         sigma = 5
         beam = np.exp(-((X - 50)**2 + (Y - 50)**2) / (2 * sigma**2))
         
-        result = pib_ratio(beam, center=(50, 50), r=5.0)
+        result, is_overexposed = pib_ratio(
+            beam,
+            center=(50, 50),
+            wavelength_m=1064e-9,
+            focal_length_m=3.0,
+            aperture_diameter_m=0.1,
+            pixel_size_m=2.9e-6,
+        )
         
         # 中心区域能量应该有一定占比
         assert result > 0.05
+        assert not is_overexposed
 
     def test_pib_ratio_small_radius(self):
         """测试小半径PIB"""
         beam = np.ones((50, 50))
         
-        result_small = pib_ratio(beam, center=(25, 25), r=5.0)
-        result_large = pib_ratio(beam, center=(25, 25), r=25.0)
+        result_small, _ = pib_ratio(
+            beam,
+            center=(25, 25),
+            wavelength_m=1064e-9,
+            focal_length_m=3.0,
+            aperture_diameter_m=0.1,
+            pixel_size_m=2.9e-6,
+        )
+        result_large, _ = pib_ratio(
+            beam,
+            center=(25, 25),
+            wavelength_m=1064e-9,
+            focal_length_m=3.0,
+            aperture_diameter_m=0.05,  # 更小的孔径 = 更大的Airy斑
+            pixel_size_m=2.9e-6,
+        )
         
-        # 小半径占比应该小于大半径
+        # 小孔径（大Airy斑）占比应该大于大孔径
         assert result_small < result_large
 
     def test_pib_ratio_zero_image(self):
         """测试零图像"""
-        result = pib_ratio(np.zeros((10, 10)), center=(5, 5), r=2.0)
+        result, is_overexposed = pib_ratio(
+            np.zeros((10, 10)),
+            center=(5, 5),
+            wavelength_m=1064e-9,
+            focal_length_m=3.0,
+            aperture_diameter_m=0.1,
+            pixel_size_m=2.9e-6,
+        )
         
         assert result == 0.0
+        assert not is_overexposed
+        assert not is_overexposed
 
 
 class TestCalculateXYDiameters:
@@ -497,13 +528,14 @@ class TestExtractBeamFeatures:
         # 创建高斯光束
         beam = 100 * np.exp(-((X - 50)**2 + (Y - 50)**2) / (2 * 10**2))
         
-        result = extract_beam_features(beam, pixel_size_um=1.0, pib_radius=5.0)
+        result = extract_beam_features(beam, pixel_size_um=1.0)
         
         # 应该包含所有特征
         assert 'centroid' in result
         assert 'd4s' in result
         assert 'pib_ratio' in result
         assert 'gaussian_diameter' in result
+        assert 'pib_overexposed' in result
         
         # 检查D4σ特征
         assert 'D_x' in result['d4s']
@@ -540,7 +572,14 @@ class TestIntegration:
         focus_features = d4sigma(focus, pixel_size_um=5.5)
         
         # 3. 计算PIB
-        pib = pib_ratio(focus, (focus_features['center_x'], focus_features['center_y']), r=5.0)
+        pib, is_overexposed = pib_ratio(
+            focus,
+            (focus_features['center_x'], focus_features['center_y']),
+            wavelength_m=1064e-9,
+            focal_length_m=3.0,
+            aperture_diameter_m=0.1,
+            pixel_size_m=5.5e-6,
+        )
         
         # 4. 计算高斯直径
         gaussian_dia = calculate_xy_diameters(

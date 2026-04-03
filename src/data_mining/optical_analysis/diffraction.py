@@ -192,10 +192,6 @@ def fnr3(
     # 调试信息
     logger.debug(f"Input FOV: [{x1v[0]:.6e}, {x1v[-1]:.6e}] m")
     logger.debug(f"Output FOV: [{x2v[0]:.6e}, {x2v[-1]:.6e}] m")
-    logger.debug(f"Propagation distance: {zz:.6e} m")
-    logger.debug(f"Wavelength: {lambda_m:.6e} m")
-    if focal_length_m is not None:
-        logger.debug(f"Focal length: {focal_length_m:.6e} m")
 
     # 添加聚焦相位（薄透镜模型，精确球面波）
     if focal_length_m is not None and focal_length_m > 0:
@@ -209,7 +205,6 @@ def fnr3(
     phase_in = np.exp(1j * k0 / (2 * zz) * (x1v[np.newaxis, :]**2 + y1v[:, np.newaxis]**2))
     Ex_hat = Ex * phase_in
 
-    # 构建菲涅尔传播核（注意：K = 2π/(λ zz)）
     K = 2 * np.pi / (lambda_m * zz)
     F_y = np.exp(-1j * K * np.outer(y1v, y2v))   # shape (Ny, Ny_out) = (Ny, Ny)
     F_x = np.exp(-1j * K * np.outer(x1v, x2v))   # shape (Nx, Nx_out) = (Nx, Nx)

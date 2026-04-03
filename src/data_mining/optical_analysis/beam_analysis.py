@@ -54,64 +54,76 @@ def fitting_gaussian(data: np.ndarray) -> Tuple[Tuple[float, float, float, float
         return (np.nan, np.nan, np.nan, np.nan), np.nan
 
 
-def d4sigma(img: np.ndarray, pixel_size_um: float = 1.0) -> Dict[str, float]:
+def d4sigma(
+    img: np.ndarray,
+    pixel_size_um: float = 1.0,
+    subtract_background: bool = False
+) -> Dict[str, float]:
     """
-    计算图像的 D4σ 直径（一阶矩和二阶矩）
+    计算 D4σ 光斑直径（符合 ISO 11146 标准）
     
     Args:
-        img: 输入图像（2D数组）
+        img: 输入光强图像（2D array, 应为非负）
         pixel_size_um: 像素尺寸（微米）
+        subtract_background: 是否自动扣除背景（推荐 True）
     
     Returns:
-        dict: 包含中心坐标和直径的字典
-            - center_x: 质心X坐标
-            - center_y: 质心Y坐标
-            - D_x: X方向直径 (μm)
-            - D_y: Y方向直径 (μm)
-            - avg_sigma2: 平均直径 (μm)
-            - center_intensity: 中心强度
+        dict with keys: center_x, center_y, D_x, D_y, avg_diameter, center_intensity
     """
-    total = img.sum()
-    if total == 0:
+    if img.ndim != 2:
+        raise ValueError("Input image must be 2D")
+    
+    # 确保非负（数值误差可能导致极小负值）
+    _img = np.maximum(img.copy().astype(np.float64), 0.0)
+    
+    if subtract_background:
+        edge_pixels = np.concatenate([
+            _img[0, :], _img[-1, :], _img[:, 0], _img[:, -1]
+        ])
+        background = np.median(edge_pixels)
+        _img = np.maximum(_img - background, 0.0)
+    
+    total = _img.sum()
+    if total == 0 or not np.isfinite(total):
         return {
-            'center_x': 0,
-            'center_y': 0,
-            'D_x': 0,
-            'D_y': 0,
-            'avg_sigma2': 0,
-            'center_intensity': 0,
+            'center_x': 0.0,
+            'center_y': 0.0,
+            'D_x': 0.0,
+            'D_y': 0.0,
+            'avg_diameter': 0.0,
+            'center_intensity': 0.0,
         }
     
-    cy, cx = center_of_mass(img)
-    # 安全转换为标量浮点数
-    try:
-        cx = float(np.ravel(np.asarray(cx))[0])
-        cy = float(np.ravel(np.asarray(cy))[0])
-    except (TypeError, IndexError, ValueError):
-        cx, cy = float(cx), float(cy)
-    h, w = img.shape
-    y, x = np.mgrid[0:h, 0:w]
+    h, w = _img.shape
+    y, x = np.mgrid[0:h, 0:w].astype(np.float64)
     
-    # 二阶中心矩（光强加权）
-    mu_xx = np.sum((x - cx)**2 * img) / total  # σ_x²
-    mu_yy = np.sum((y - cy)**2 * img) / total  # σ_y²
-    Dx = 4 * np.sqrt(max(mu_xx, 0)) * pixel_size_um
-    Dy = 4 * np.sqrt(max(mu_yy, 0)) * pixel_size_um
+    # 一阶矩（质心）
+    cx = np.sum(x * _img) / total
+    cy = np.sum(y * _img) / total
     
-    # 安全获取中心强度
-    cy_int = int(round(cy))
+    # 二阶中心矩
+    mu_xx = np.sum((x - cx)**2 * _img) / total
+    mu_yy = np.sum((y - cy)**2 * _img) / total
+    
+    # D4σ = 4 * σ
+    Dx = 4.0 * np.sqrt(max(mu_xx, 0.0)) * pixel_size_um
+    Dy = 4.0 * np.sqrt(max(mu_yy, 0.0)) * pixel_size_um
+    avg_diameter = np.sqrt(Dx * Dy)
+    
+    # 中心强度（双线性插值更准，但这里用最近邻）
     cx_int = int(round(cx))
+    cy_int = int(round(cy))
     if 0 <= cy_int < h and 0 <= cx_int < w:
-        center_intensity = float(img[cy_int, cx_int])
+        center_intensity = float(_img[cy_int, cx_int])
     else:
         center_intensity = 0.0
     
     return {
-        'center_x': cx,
-        'center_y': cy,
+        'center_x': float(cx),
+        'center_y': float(cy),
         'D_x': float(Dx),
         'D_y': float(Dy),
-        'avg_sigma2': float(np.sqrt(Dx * Dy)),
+        'avg_diameter': float(avg_diameter),
         'center_intensity': center_intensity,
     }
 

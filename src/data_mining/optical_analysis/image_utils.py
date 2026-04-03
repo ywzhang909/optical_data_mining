@@ -72,13 +72,13 @@ def load_image(file_path: Union[str, Path], as_grayscale: bool = True) -> np.nda
     return np.array(image)
 
 
-def process_image_data(
+def subtract_dark_field(
     img_array: np.ndarray, 
     denoise_method: str = 'none', 
     manual_threshold: Optional[float] = None
 ) -> Tuple[np.ndarray, float]:
     """
-    处理图像数据：去暗场和计算强度
+    暗场校正：计算背景阈值并从图像中减去
     
     Args:
         img_array: 输入图像数组

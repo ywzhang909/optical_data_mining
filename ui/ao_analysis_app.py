@@ -17,6 +17,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 import plotly.graph_objects as go
+from loguru import logger
+import sys
+
+
 
 # 导入光束分析模块
 from data_mining.optical_analysis import (
@@ -35,16 +39,17 @@ from data_mining.optical_analysis import (
 # 导入图像处理工具
 from data_mining.optical_analysis import (
     read_image_to_numpy,
-    process_image_data,
+    subtract_dark_field,
 )
 
 # 配置中文字体
 plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
 
-# 相机像素参数
-FOCAL_CAM_PIXEL = 2.9e-6  # 光瞳/焦面相机像素尺寸 (m)
-AXIS_CAM_PIXEL = 5.5e-6   # 光轴相机像素尺寸 (m)
+
+# 配置loguru：移除默认handler，添加INFO级别handler
+logger.remove()
+logger.add(sys.stderr, level="DEBUG")
 
 
 def plot_beam_visualization(img, title, pixel_size_um, features):
@@ -58,7 +63,7 @@ def plot_beam_visualization(img, title, pixel_size_um, features):
         img: 原始图像
         title: 标题
         pixel_size_um: 像素尺寸（微米）
-        features: 特征字典，包含center_x, center_y, D_x, D_y, avg_sigma2
+        features: 特征字典，包含center_x, center_y, D_x, D_y, avg_diameter
     
     Returns:
         fig: matplotlib图像
@@ -68,7 +73,7 @@ def plot_beam_visualization(img, title, pixel_size_um, features):
     
     cx, cy = features['center_x'], features['center_y']
     # 使用平均sigma2作为半径
-    r_pix = features['avg_sigma2'] / pixel_size_um / 2  # 半径（像素）
+    r_pix = features['avg_diameter'] / pixel_size_um / 2  # 半径（像素）
     
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
     
@@ -88,7 +93,7 @@ def plot_beam_visualization(img, title, pixel_size_um, features):
         color='cyan', 
         linewidth=2,
         linestyle='--',
-        label=f'D4σ (r={features["avg_sigma2"]/2:.1f}μm)'
+        label=f'D4σ (r={features["avg_diameter"]/2:.1f}μm)'
     )
     ax1.add_patch(circle)
     ax1.legend(loc='upper right', fontsize=8)
@@ -133,13 +138,15 @@ def plot_beam_visualization(img, title, pixel_size_um, features):
     return fig
 
 
-def plot_3d_visualization(img, title):
+def plot_3d_visualization(img, title, zmin=None, zmax=None):
     """
     使用Plotly绘制3D表面图
     
     Args:
         img: 输入图像数组
         title: 标题
+        zmin: 颜色轴最小值（用于统一尺度）
+        zmax: 颜色轴最大值（用于统一尺度）
     
     Returns:
         plotly_fig: Plotly 3D图表
@@ -154,12 +161,44 @@ def plot_3d_visualization(img, title):
     X, Y = np.meshgrid(x, y)
     Z = img[::step, ::step]
     
+    # 统一尺度
+    if zmin is None:
+        zmin = Z.min()
+    if zmax is None:
+        zmax = Z.max()
+    
+    # 计算xyz范围，用于统一尺度
+    x_range = X.max() - X.min()
+    y_range = Y.max() - Y.min()
+    z_range = zmax - zmin
+    
+    # 归一化Z到与XY相同的尺度范围，使xyz视觉比例一致
+    if z_range > 0:
+        target_range = (x_range + y_range) / 2
+        Z_display = (Z - zmin) / z_range * target_range
+    else:
+        Z_display = Z - zmin
+    
+    # 计算xyz范围，用于统一尺度
+    x_range = X.max() - X.min()
+    y_range = Y.max() - Y.min()
+    z_range = zmax - zmin
+    
+    # 归一化Z到与XY相同的尺度范围，使xyz视觉比例一致
+    if z_range > 0:
+        target_range = (x_range + y_range) / 2
+        Z_display = (Z - zmin) / z_range * target_range
+    else:
+        Z_display = Z - zmin
+    
     # 创建Plotly 3D表面图
     plotly_fig = go.Figure(data=[go.Surface(
         x=X, 
         y=Y, 
-        z=Z,
+        z=Z_display,
         colorscale='Hot',
+        cmin=zmin,
+        cmax=zmax,
         colorbar=dict(title='Intensity'),
         hovertemplate='X: %{x:.1f}<br>Y: %{y:.1f}<br>Intensity: %{z:.1f}<extra></extra>'
     )])
@@ -170,7 +209,8 @@ def plot_3d_visualization(img, title):
             xaxis_title='X (pixel)',
             yaxis_title='Y (pixel)',
             zaxis_title='Intensity',
-            aspectmode='auto'
+            aspectmode='data',
+            aspectratio=dict(x=1, y=1, z=1),
         ),
         width=800,
         height=600,
@@ -197,12 +237,12 @@ def main():
     st.sidebar.subheader("相机参数")
     axis_pixel = st.sidebar.number_input(
         "光轴相机像素尺寸 (μm)", 
-        value=5.5, 
+        value=2.9, 
         format="%.2f"
     ) * 1e-6
     pupil_pixel = st.sidebar.number_input(
         "光瞳相机像素尺寸 (μm)", 
-        value=2.9, 
+        value=2.9*20, 
         format="%.2f"
     ) * 1e-6
     
@@ -257,8 +297,8 @@ def main():
             st.header("Image Preprocessing")
             
             # 去暗场处理
-            axis_denoise, axis_black = process_image_data(axis_img, denoise_method, manual_threshold)
-            pupil_denoise, pupil_black = process_image_data(pupil_img, denoise_method, manual_threshold)
+            axis_denoise, axis_black = subtract_dark_field(axis_img, denoise_method, manual_threshold)
+            pupil_denoise, pupil_black = subtract_dark_field(pupil_img, denoise_method, manual_threshold)
             
             # 显示原始图像
             col1, col2 = st.columns(2)
@@ -278,13 +318,13 @@ def main():
             with col1:
                 st.metric("光轴 D4σ X", f"{axis_features['D_x']:.2f} μm")
                 st.metric("光轴 D4σ Y", f"{axis_features['D_y']:.2f} μm")
-                st.metric("光轴 平均直径", f"{axis_features['avg_sigma2']:.2f} μm")
+                st.metric("光轴 平均直径", f"{axis_features['avg_diameter']:.2f} μm")
                 st.metric("光轴 中心强度", f"{axis_features['center_intensity']:.2f}")
             
             with col2:
                 st.metric("光瞳 D4σ X", f"{pupil_features['D_x']:.2f} μm")
                 st.metric("光瞳 D4σ Y", f"{pupil_features['D_y']:.2f} μm")
-                st.metric("光瞳 平均直径", f"{pupil_features['avg_sigma2']:.2f} μm")
+                st.metric("光瞳 平均直径", f"{pupil_features['avg_diameter']:.2f} μm")
                 st.metric("光瞳 中心强度", f"{pupil_features['center_intensity']:.2f}")
             
             # PIB ratio
@@ -366,22 +406,26 @@ def main():
             # 斯特列尔比可视化 (Plotly 3D)
             st.subheader("Strehl Ratio Visualization - 3D (Plotly)")
             
+            # 计算统一尺度
+            zmin = min(axis_shifted.min(), ideal_matched.min(), pupil_shifted.min())
+            zmax = max(axis_shifted.max(), ideal_matched.max(), pupil_shifted.max())
+            
             # 创建3个子图：实际光斑、理想光斑、光瞳
             col1, col2, col3 = st.columns(3)
             
             with col1:
-                st.plotly_chart(plot_3d_visualization(axis_shifted, "Actual Focus"), width='stretch')
+                st.plotly_chart(plot_3d_visualization(axis_shifted, "Actual Focus", zmin, zmax), width='stretch')
             with col2:
-                st.plotly_chart(plot_3d_visualization(ideal_matched, "Ideal Focus"), width='stretch')
+                st.plotly_chart(plot_3d_visualization(ideal_matched, "Ideal Focus", zmin, zmax), width='stretch')
             with col3:
-                st.plotly_chart(plot_3d_visualization(pupil_shifted, "Pupil"), width='stretch')
+                st.plotly_chart(plot_3d_visualization(pupil_shifted, "Pupil", zmin, zmax), width='stretch')
             
             # BPP calculation
             st.header("BPP (Beam Parameter Product)")
             
             # 将直径转换为mm
-            axis_diameter_mm = axis_features['avg_sigma2'] * 1e-3
-            pupil_diameter_mm = pupil_features['avg_sigma2'] * 1e-3
+            axis_diameter_mm = axis_features['avg_diameter'] * 1e-3
+            pupil_diameter_mm = pupil_features['avg_diameter'] * 1e-3
             
             bpp_result = calculate_bpp(pupil_diameter_mm, axis_diameter_mm, focal_length)
             
@@ -441,13 +485,13 @@ def main():
                 "值": [
                     f"{axis_features['D_x']:.2f}",
                     f"{axis_features['D_y']:.2f}",
-                    f"{axis_features['avg_sigma2']:.2f}",
+                    f"{axis_features['avg_diameter']:.2f}",
                     f"{axis_gaussian['gaussian_dia_x(um)']:.2f}",
                     f"{axis_gaussian['gaussian_dia_y(um)']:.2f}",
                     f"{axis_pib:.4f}",
                     f"{pupil_features['D_x']:.2f}",
                     f"{pupil_features['D_y']:.2f}",
-                    f"{pupil_features['avg_sigma2']:.2f}",
+                    f"{pupil_features['avg_diameter']:.2f}",
                     f"{strehl:.4f}",
                     f"{bpp_result['BPP_mm_mrad']:.4f}",
                     f"{bpp_result['divergence_mrad']:.4f}",

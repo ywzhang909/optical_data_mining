@@ -10,6 +10,7 @@
 """
 
 import numpy as np
+from aotools.opticalpropagation import twoStepFresnel
 from typing import Tuple, Optional
 
 from loguru import logger
@@ -67,9 +68,6 @@ def shift_to_center_fft(image: np.ndarray, cx: float, cy: float) -> np.ndarray:
     # 裁剪成正方形
     return crop_to_square(shifted)
 
-
-import numpy as np
-from typing import Optional, Tuple
 
 def suggest_output_grid_for_focusing(
     wavelength: float,
@@ -172,6 +170,7 @@ def fnr3(
     """
     if zz <= 0:
         raise ValueError("Propagation distance zz must be positive.")
+    focal_length_m = focal_length_m if focal_length_m else zz
     
     dx1 = input_pixel_size
     dy1 = dx1
@@ -194,31 +193,31 @@ def fnr3(
     logger.debug(f"Output FOV: [{x2v[0]:.6e}, {x2v[-1]:.6e}] m")
 
     # 添加聚焦相位（薄透镜模型，精确球面波）
-    if focal_length_m is not None and focal_length_m > 0:
-        r1_sq = x1v[np.newaxis, :]**2 + y1v[:, np.newaxis]**2
-        phase = (2 * np.pi / lambda_m) * (focal_length_m - np.sqrt(focal_length_m**2 + r1_sq))
-        lens_phase = np.exp(1j * phase)
-        Ex = Ex * lens_phase
-        logger.debug(f"Max lens phase shift: {np.max(np.abs(phase)):.3f} rad")
+    r1_sq = x1v[np.newaxis, :]**2 + y1v[:, np.newaxis]**2
+    phase = (2 * np.pi / lambda_m) * (focal_length_m - np.sqrt(focal_length_m**2 + r1_sq))
+    lens_phase = np.exp(1j * phase)
+    Ex = Ex * lens_phase
+    logger.debug(f"Max lens phase shift: {np.max(np.abs(phase)):.3f} rad")
 
-    # 输入二次相位因子
-    phase_in = np.exp(1j * k0 / (2 * zz) * (x1v[np.newaxis, :]**2 + y1v[:, np.newaxis]**2))
-    Ex_hat = Ex * phase_in
+    # # 输入二次相位因子
+    # phase_in = np.exp(1j * k0 / (2 * zz) * (x1v[np.newaxis, :]**2 + y1v[:, np.newaxis]**2))
+    # Ex_hat = Ex * phase_in
 
-    K = 2 * np.pi / (lambda_m * zz)
-    F_y = np.exp(-1j * K * np.outer(y1v, y2v))   # shape (Ny, Ny_out) = (Ny, Ny)
-    F_x = np.exp(-1j * K * np.outer(x1v, x2v))   # shape (Nx, Nx_out) = (Nx, Nx)
+    # K = 2 * np.pi / (lambda_m * zz)
+    # F_y = np.exp(-1j * K * np.outer(y1v, y2v))   # shape (Ny, Ny_out) = (Ny, Ny)
+    # F_x = np.exp(-1j * K * np.outer(x1v, x2v))   # shape (Nx, Nx_out) = (Nx, Nx)
 
-    # 执行分离变量的菲涅尔积分：Ex2 = F_y^T @ Ex_hat @ F_x
-    temp = F_y.T @ Ex_hat          # (Ny, Ny) @ (Ny, Nx) -> (Ny, Nx)
-    Ex2 = temp @ F_x               # (Ny, Nx) @ (Nx, Nx) -> (Ny, Nx)
+    # # 执行分离变量的菲涅尔积分：Ex2 = F_y^T @ Ex_hat @ F_x
+    # temp = F_y.T @ Ex_hat          # (Ny, Ny) @ (Ny, Nx) -> (Ny, Nx)
+    # Ex2 = temp @ F_x               # (Ny, Nx) @ (Nx, Nx) -> (Ny, Nx)
 
-    # 输出二次相位因子 + 常数因子
-    phase_out = np.exp(1j * k0 * zz + 1j * k0 / (2 * zz) * (x2v[np.newaxis, :]**2 + y2v[:, np.newaxis]**2))
-    Ex2 = Ex2 * phase_out * (dx1 * dy1) / (1j * lambda_m * zz)
+    # # 输出二次相位因子 + 常数因子
+    # phase_out = np.exp(1j * k0 * zz + 1j * k0 / (2 * zz) * (x2v[np.newaxis, :]**2 + y2v[:, np.newaxis]**2))
+    # Ex2 = Ex2 * phase_out * (dx1 * dy1) / (1j * lambda_m * zz)
 
-    logger.debug(f"Input power: {np.sum(np.abs(Ex)**2) * dx1 * dy1:.6e}")
-    logger.debug(f"Output power: {np.sum(np.abs(Ex2)**2) * dx2 * dy2:.6e}")
+    # logger.debug(f"Input power: {np.sum(np.abs(Ex)**2) * dx1 * dy1:.6e}")
+    # logger.debug(f"Output power: {np.sum(np.abs(Ex2)**2) * dx2 * dy2:.6e}")
+    Ex2 = twoStepFresnel(Ex, lambda_m, dx1, dx2, zz)
 
     return Ex2
 
@@ -260,15 +259,16 @@ def calculate_strehl_ratio_with_energy_conservation(
         output_pixel_size = 5.5e-6
 
     # 构建理想复振幅（将光瞳强度作为振幅，使用聚焦相位）
-    # 注意：光瞳图像被用作复振幅的振幅，相位设为0，然后应用聚焦透镜的相位
-    ideal_focus_intensity = np.abs(fnr3(
+    E_out = fnr3(
         pupil_img, 
         input_pixel_size, 
         output_pixel_size, 
         f_m, 
         wavelength_m,
         focal_length_m=focal_length_m  # 传入聚焦焦距
-    ))**2
+    )
+
+    ideal_focus_intensity = np.abs(E_out)**2
 
     # 能量守恒校准
     total_energy_actual = np.sum(focus_img)

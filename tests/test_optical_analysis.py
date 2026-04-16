@@ -31,7 +31,7 @@ from src.data_mining.optical_analysis import (
     normalize_image_for_display,
     read_image_to_numpy,
     load_image,
-    process_image_data,
+    subtract_dark_field,
     normalize_image,
     resize_image,
     pad_to_square,
@@ -464,20 +464,20 @@ class TestImageUtils:
         assert result.min() == 0
         assert result.max() == 10
 
-    def test_process_image_data_none(self):
+    def test_subtract_dark_field_none(self):
         """测试不去暗场"""
         img = np.array([[10, 20], [30, 40]])
         
-        result, black = process_image_data(img, denoise_method='none')
+        result, black = subtract_dark_field(img, denoise_method='none')
         
         assert black == 0
         np.testing.assert_array_equal(result, img)
 
-    def test_process_image_data_median(self):
+    def test_subtract_dark_field_median(self):
         """测试中值去暗场"""
         img = np.array([[10, 20], [30, 40]])
         
-        result, black = process_image_data(img, denoise_method='median')
+        result, black = subtract_dark_field(img, denoise_method='median')
         
         assert black == 25  # median([10,20,30,40]) = 25
         assert result[0, 0] == 0  # 10 - 25 = -15 -> 0
@@ -485,11 +485,11 @@ class TestImageUtils:
         assert result[1, 0] == 5  # 30 - 25 = 5
         assert result[1, 1] == 15  # 40 - 25 = 15
 
-    def test_process_image_data_1_e(self):
+    def test_subtract_dark_field_1_e(self):
         """测试1/e去暗场"""
         img = np.array([[10, 20], [30, 100]])
         
-        result, black = process_image_data(img, denoise_method='1_e')
+        result, black = subtract_dark_field(img, denoise_method='1_e')
         
         expected_black = 100 / np.e
         assert np.isclose(black, expected_black)

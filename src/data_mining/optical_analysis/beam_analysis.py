@@ -53,6 +53,21 @@ def fitting_gaussian(data: np.ndarray) -> Tuple[Tuple[float, float, float, float
     except RuntimeError:
         return (np.nan, np.nan, np.nan, np.nan), np.nan
 
+def center_of_mass_numpy(intensity:np.ndarray, xv:np.ndarray, yv:np.ndarray, moment:int=1) -> tuple[float, float]:
+    """
+    计算光强的中心位置
+
+    :param intensity: 强度分布
+    :param x: x坐标矩阵
+    :param y: y坐标矩阵
+    :param moment: 中心位置的阶数
+    :return center_x, center_y: 光强的中心位置
+    """
+    _intensity = intensity.copy().astype(np.float32)**moment
+    total_intensity = np.sum(_intensity)
+    c_x = np.sum(xv * _intensity) / total_intensity
+    c_y = np.sum(yv * _intensity) / total_intensity
+    return (float(c_x), float(c_y))
 
 def d4sigma(
     img: np.ndarray,
@@ -97,9 +112,7 @@ def d4sigma(
     h, w = _img.shape
     y, x = np.mgrid[0:h, 0:w].astype(np.float64)
     
-    # 一阶矩（质心）
-    cx = np.sum(x * _img) / total
-    cy = np.sum(y * _img) / total
+    cx, cy = center_of_mass_numpy(_img, x, y)
     
     # 二阶中心矩
     mu_xx = np.sum((x - cx)**2 * _img) / total

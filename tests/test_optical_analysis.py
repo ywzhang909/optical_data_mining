@@ -9,8 +9,8 @@ import numpy as np
 from pathlib import Path
 
 # 导入被测模块
-from src.data_mining.optical_analysis import (
-    # beam_analysis
+# 直接导入beam_analysis模块，避免依赖aotools
+from src.data_mining.optical_analysis.beam_analysis import (
     gaussian,
     fitting_gaussian,
     d4sigma,
@@ -20,23 +20,6 @@ from src.data_mining.optical_analysis import (
     calculate_m2,
     calculate_centroid,
     extract_beam_features,
-    # diffraction
-    crop_to_square,
-    shift_to_center_fft,
-    fnr3,
-    calculate_strehl_ratio_with_energy_conservation,
-    propagate_through_lens,
-    angular_spectrum_propagation,
-    # image_utils
-    normalize_image_for_display,
-    read_image_to_numpy,
-    load_image,
-    subtract_dark_field,
-    normalize_image,
-    resize_image,
-    pad_to_square,
-    clip_negative_values,
-    calculate_background_threshold,
 )
 
 

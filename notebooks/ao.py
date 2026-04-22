@@ -15,11 +15,23 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Circle, Ellipse
 
 from data_mining.image.common import *
+from data_mining.optical_analysis.beam_analysis import *
 
 FOCAL_CAM_PIXEL = 2.9e-6
 AXIS_CAM_PIXEL = 5.5e-6
 
 plt.gray()
+# %%
+from PIL import Image
+axis_image = Image.open(r"D:\Projects\TIFO\data-mining\data\AO调试数据\20260326\调控区image\光轴image\（AO闭环）20260326 17：09：49(全子束-40W-平顶-5s)\20260326 17：09：49.79.jpg")
+axis_array = np.array(axis_image)
+h,w = axis_array.shape
+yv, xv = np.mgrid[0:h, 0:w].astype(np.float64)
+
+cx, cy = center_of_mass_numpy(axis_array, xv, yv, 3)
+print(cx,cy)
+plt.imshow(axis_image)
+plt.scatter(cx, cy, c='red')
 # %%
 
 axis_imgs_dir = Path('../data/AO调试数据/20260326/数控区-光轴相机/20260326 17：02：43AO')

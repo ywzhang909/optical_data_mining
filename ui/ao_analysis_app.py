@@ -255,6 +255,7 @@ def main():
         format_func=lambda x: {'none': '无', 'median': '中值', 'min': '最小值', '1_e': '1/e', 'manual': '手动输入'}[x]
     )
     
+    
     # 手动输入阈值
     manual_threshold = None
     if denoise_method == 'manual':

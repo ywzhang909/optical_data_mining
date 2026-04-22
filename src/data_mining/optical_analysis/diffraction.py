@@ -228,8 +228,8 @@ def calculate_strehl_ratio_with_energy_conservation(
     f_m: float = 3,
     wavelength_m: float = 1064e-9,
     focal_length_m: float = 3.0,
-    input_pixel_size: Optional[float] = None,
-    output_pixel_size: Optional[float] = None,
+    input_pixel_size: float = 2.9e-6,
+    output_pixel_size: float = 5.5e-6,
 ) -> Tuple[float, np.ndarray]:
     """
     基于能量守恒的斯特列尔比计算
@@ -252,27 +252,21 @@ def calculate_strehl_ratio_with_energy_conservation(
     pupil_img = crop_to_square(pupil_img)
     focus_img = crop_to_square(focus_img)
 
-    # 默认像素尺寸
-    if input_pixel_size is None:
-        input_pixel_size = 2.9e-6
-    if output_pixel_size is None:
-        output_pixel_size = 5.5e-6
-
     # 构建理想复振幅（将光瞳强度作为振幅，使用聚焦相位）
-    E_out = fnr3(
-        pupil_img, 
-        input_pixel_size, 
-        output_pixel_size, 
-        f_m, 
-        wavelength_m,
-        focal_length_m=focal_length_m  # 传入聚焦焦距
-    )
+    N = pupil_img.shape[0]
+    x = (np.arange(N) - N // 2) * input_pixel_size
+    y = (np.arange(N) - N // 2) * input_pixel_size
+    X, Y = np.meshgrid(x, y, indexing='xy')
+    k = 2 * np.pi / wavelength_m
+    lens_phase = np.exp(-1j * k * (X**2 + Y**2) / (2 * f_m))
+    E_in = complex(1) * pupil_img * lens_phase
+    E_out = twoStepFresnel(E_in, wavelength_m, input_pixel_size, output_pixel_size, f_m)
 
     ideal_focus_intensity = np.abs(E_out)**2
 
     # 能量守恒校准
-    total_energy_actual = np.sum(focus_img)
-    total_energy_ideal = np.sum(ideal_focus_intensity)
+    total_energy_actual = np.sum(focus_img[focus_img > 10])
+    total_energy_ideal = np.sum(ideal_focus_intensity[ideal_focus_intensity > 10])
 
     if total_energy_ideal == 0:
         return 0.0, np.zeros_like(focus_img)

@@ -112,7 +112,7 @@ def d4sigma(
     h, w = _img.shape
     y, x = np.mgrid[0:h, 0:w].astype(np.float64)
     
-    cx, cy = center_of_mass_numpy(_img, x, y)
+    cx, cy = center_of_mass_numpy(_img, x, y, 3)
     
     # 二阶中心矩
     mu_xx = np.sum((x - cx)**2 * _img) / total

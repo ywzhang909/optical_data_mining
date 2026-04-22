@@ -40,13 +40,16 @@ dependencies = [
     "PyWavelets>=1.4.0",
     "aotools>=1.0.7",
     "streamlit",
+    "scipy>=1.16.3",
+    "pillow>=12.0.0",
 ]
+
+
 
 [dependency-groups]
 dev = [
     "ipykernel>=6.29.5",
 ]
-
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -63,6 +66,4 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = ["data_mining"]
-
-[tool.setuptools.package-dir]
-data_mining = "src/data_mining"
+package-dir = {"" = "src"}

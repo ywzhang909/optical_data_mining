@@ -31,3 +31,4 @@ doc/ao/*.bmp
 doc/ao/*.png
 tests/**/*.png
 output*
+.history*

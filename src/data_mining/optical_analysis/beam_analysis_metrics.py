@@ -3,6 +3,8 @@ Module containing beam analysis metrics and calculations
 """
 
 import numpy as np
+import cv2
+import math
 from . import (
     d4sigma,
     pib_ratio,
@@ -13,6 +15,122 @@ from . import (
     read_image_to_numpy,
     subtract_dark_field,
 )
+
+
+def convert_to_cv(float_image) -> np.ndarray:
+    """
+    将图像转换为OpenCV兼容的uint8格式
+    """
+    assert isinstance(float_image, np.ndarray), (
+        f"{float_image} must be a numpy array, but got {type(float_image)}"
+    )
+    image_min = np.min(float_image)
+    image_max = np.max(float_image)
+
+    normalized_image = (float_image - image_min) / (image_max - image_min) * 255
+    uint8_image = normalized_image.astype(np.uint8)
+    return uint8_image
+
+
+def find_spot_border(image):
+    """
+    处理光斑图片，计算噪声阈值，去除噪声并拟合包含光斑的圆形。
+
+    参数:
+    image (numpy.ndarray): 输入的光斑图片，应为单通道灰度图像。
+
+    返回:
+    numpy.ndarray: 去除噪声后的图像。
+    tuple: 拟合圆形的圆心坐标 (x, y) 和半径。
+    """
+    # 验证输入
+    if not isinstance(image, np.ndarray):
+        raise TypeError(f"find_spot_border expects numpy array, got {type(image)}")
+
+    # 步骤 1: 高斯降噪
+    denoised_image = cv2.GaussianBlur(image, (3, 3), 0)
+    # 步骤 2: canny边缘检测
+    noise_threshold = np.max(denoised_image) * (1 / math.e)
+    denoised_image = np.where(denoised_image > noise_threshold, denoised_image, 0)
+    # 确保数据类型正确
+    if denoised_image.dtype != np.uint8:
+        denoised_image = denoised_image.astype(np.uint8)
+    # 步骤 3: 去除噪声
+    denoised_image = cv2.fastNlMeansDenoising(denoised_image, None, 10, 7, 21)
+    # denoised_image = cv2.Canny(image, 1, 1)
+    # 步骤 4: 二值化
+    near_binary_img = cv2.threshold(
+        denoised_image, noise_threshold, 255, cv2.THRESH_BINARY
+    )[1]
+    # 步骤 5: 拟合一个圆形正好包含光斑
+    contours, _ = cv2.findContours(
+        near_binary_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    if contours:
+        # 找到最大的轮廓
+        largest_contour = max(contours, key=cv2.contourArea)
+        ((x, y), radius) = cv2.minEnclosingCircle(largest_contour)
+    else:
+        x, y = np.nan, np.nan
+        radius = np.nan
+
+    return {"border_x": x, "border_y": y, "border_radius": radius}
+
+
+def ellipse_fit(uint8_image):
+    # 计算噪声阈值（使用30%作为阈值）
+    noise_threshhold = np.max(uint8_image) * 0.3
+
+    # 二值化处理
+    binary_image = cv2.threshold(uint8_image, noise_threshhold, 255, cv2.THRESH_BINARY)[
+        1
+    ]
+
+    # 查找轮廓
+    try:
+        contours, _ = cv2.findContours(
+            binary_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        assert contours, "No contours found"
+        # 找到最大的轮廓
+        largest_contour = max(contours, key=cv2.contourArea)
+        (ellipse_center_x, ellipse_center_y), (short_axis, long_axis), angle = (
+            cv2.fitEllipse(largest_contour)
+        )
+    except (AssertionError, ValueError):
+        return {
+            "ellipse_center_x": np.nan,
+            "ellipse_center_y": np.nan,
+            "short_axis": np.nan,
+            "long_axis": np.nan,
+            "ellipticity": np.nan,
+            "angle": np.nan,
+            "uniformity": np.nan,
+        }
+
+    area = cv2.contourArea(largest_contour)
+    # 创建掩膜用于后续处理
+    mask = np.zeros_like(uint8_image, dtype=np.uint8)
+    if area > 100:
+        # 将主轮廓内部填充为白色 (255)
+        cv2.drawContours(mask, [largest_contour], -1, (255,), thickness=cv2.FILLED)
+        # 使用掩膜提取光斑内的所有像素
+        mean_val, std_val = cv2.meanStdDev(uint8_image, mask=mask)
+        mean_intensity = mean_val[0][0]
+        std_intensity = std_val[0][0]
+        uniformity = std_intensity / mean_intensity
+    else:
+        uniformity = np.nan
+
+    return {
+        "ellipse_center_x": ellipse_center_x,
+        "ellipse_center_y": ellipse_center_y,
+        "short_axis": short_axis,
+        "long_axis": long_axis,
+        "ellipticity": long_axis / short_axis,
+        "angle": angle,
+        "uniformity": uniformity,
+    }
 
 
 class BeamAnalysisMetrics:
@@ -126,6 +244,16 @@ class BeamAnalysisMetrics:
         bpp_diffraction = lambda_um / np.pi
         m2 = bpp_result["BPP_mm_mrad"] / bpp_diffraction
 
+        # Calculate elliptical fitting parameters
+        axis_uint8 = convert_to_cv(axis_denoise)
+        pupil_uint8 = convert_to_cv(pupil_denoise)
+
+        axis_ellipse_params = ellipse_fit(axis_uint8)
+        pupil_ellipse_params = ellipse_fit(pupil_uint8)
+
+        axis_border_params = find_spot_border(axis_denoise)
+        pupil_border_params = find_spot_border(pupil_denoise)
+
         # Compile all results
         results = {
             # D4σ metrics
@@ -143,6 +271,28 @@ class BeamAnalysisMetrics:
             # Gaussian fitting metrics
             "axis_gaussian_diameter_X_um": axis_gaussian["gaussian_dia_x(um)"],
             "axis_gaussian_diameter_Y_um": axis_gaussian["gaussian_dia_y(um)"],
+            # Elliptical fitting metrics
+            "axis_ellipse_center_x": axis_ellipse_params["ellipse_center_x"],
+            "axis_ellipse_center_y": axis_ellipse_params["ellipse_center_y"],
+            "axis_short_axis": axis_ellipse_params["short_axis"],
+            "axis_long_axis": axis_ellipse_params["long_axis"],
+            "axis_ellipticity": axis_ellipse_params["ellipticity"],
+            "axis_angle": axis_ellipse_params["angle"],
+            "axis_uniformity": axis_ellipse_params["uniformity"],
+            "pupil_ellipse_center_x": pupil_ellipse_params["ellipse_center_x"],
+            "pupil_ellipse_center_y": pupil_ellipse_params["ellipse_center_y"],
+            "pupil_short_axis": pupil_ellipse_params["short_axis"],
+            "pupil_long_axis": pupil_ellipse_params["long_axis"],
+            "pupil_ellipticity": pupil_ellipse_params["ellipticity"],
+            "pupil_angle": pupil_ellipse_params["angle"],
+            "pupil_uniformity": pupil_ellipse_params["uniformity"],
+            # Border fitting metrics
+            "axis_border_x": axis_border_params["border_x"],
+            "axis_border_y": axis_border_params["border_y"],
+            "axis_border_radius": axis_border_params["border_radius"],
+            "pupil_border_x": pupil_border_params["border_x"],
+            "pupil_border_y": pupil_border_params["border_y"],
+            "pupil_border_radius": pupil_border_params["border_radius"],
             # Strehl ratio
             "strehl_ratio": strehl,
             # BPP and M² metrics
@@ -154,6 +304,10 @@ class BeamAnalysisMetrics:
             "axis_features": axis_features,
             "pupil_features": pupil_features,
             "axis_gaussian_params": axis_gaussian,
+            "axis_ellipse_params": axis_ellipse_params,
+            "pupil_ellipse_params": pupil_ellipse_params,
+            "axis_border_params": axis_border_params,
+            "pupil_border_params": pupil_border_params,
             "bpp_params": bpp_result,
             "is_overexposed_warning": is_overexposed,
             "axis_shifted_image": axis_shifted,
@@ -193,6 +347,29 @@ class BeamAnalysisMetrics:
             "is_overexposed",
             "axis_gaussian_diameter_X_um",
             "axis_gaussian_diameter_Y_um",
+            # Elliptical fitting metrics
+            "axis_ellipse_center_x",
+            "axis_ellipse_center_y",
+            "axis_short_axis",
+            "axis_long_axis",
+            "axis_ellipticity",
+            "axis_angle",
+            "axis_uniformity",
+            "pupil_ellipse_center_x",
+            "pupil_ellipse_center_y",
+            "pupil_short_axis",
+            "pupil_long_axis",
+            "pupil_ellipticity",
+            "pupil_angle",
+            "pupil_uniformity",
+            # Border fitting metrics
+            "axis_border_x",
+            "axis_border_y",
+            "axis_border_radius",
+            "pupil_border_x",
+            "pupil_border_y",
+            "pupil_border_radius",
+            # Other metrics
             "strehl_ratio",
             "BPP_mm_mrad",
             "divergence_mrad",

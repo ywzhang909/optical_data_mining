@@ -174,18 +174,32 @@ def main():
 
             # 显示D4σ结果
             st.header("D4σ Feature Extraction")
-            col1, col2 = st.columns(2)
+            col1, col2, col3, col4 = st.columns(4)
             with col1:
                 st.metric("光轴 D4σ X", f"{results['axis_D4σ_X_um']:.2f} μm")
                 st.metric("光轴 D4σ Y", f"{results['axis_D4σ_Y_um']:.2f} μm")
                 st.metric("光轴 平均直径", f"{results['axis_avg_diameter_um']:.2f} μm")
-                st.metric("光轴 中心强度", f"{results['axis_center_intensity']:.2f}")
+                st.metric("光轴 最大亮度", f"{float(np.max(axis_img)):.2f}")
+                st.metric("光轴 椭圆度", f"{results['axis_ellipticity']:.4f}")
+                st.metric("光轴 均匀度", f"{results['axis_uniformity']:.4f}")
 
             with col2:
+                st.metric("光轴 短轴", f"{results['axis_short_axis']:.2f} pixel")
+                st.metric("光轴 长轴", f"{results['axis_long_axis']:.2f} pixel")
+                st.metric("光轴 角度", f"{results['axis_angle']:.2f} °")
+
+            with col3:
                 st.metric("光瞳 D4σ X", f"{results['pupil_D4σ_X_um']:.2f} μm")
                 st.metric("光瞳 D4σ Y", f"{results['pupil_D4σ_Y_um']:.2f} μm")
                 st.metric("光瞳 平均直径", f"{results['pupil_avg_diameter_um']:.2f} μm")
-                st.metric("光瞳 中心强度", f"{results['pupil_center_intensity']:.2f}")
+                st.metric("光瞳 最大亮度", f"{float(np.max(pupil_img)):.2f}")
+                st.metric("光瞳 椭圆度", f"{results['pupil_ellipticity']:.4f}")
+                st.metric("光瞳 均匀度", f"{results['pupil_uniformity']:.4f}")
+
+            with col4:
+                st.metric("光瞳 短轴", f"{results['pupil_short_axis']:.2f} pixel")
+                st.metric("光瞳 长轴", f"{results['pupil_long_axis']:.2f} pixel")
+                st.metric("光瞳 角度", f"{results['pupil_angle']:.2f} °")
 
             # PIB ratio
             st.header("PIB Ratio Calculation")

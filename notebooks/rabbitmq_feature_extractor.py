@@ -11,10 +11,10 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
-sys.path.append('./src')
+sys.path.append('./ui')
 
-import dotenv
-from data_mining.image.common import get_profiles, read_tiff_to_numpy
+
+from analysis.image.common import get_profiles, read_tiff_to_numpy
 
 dotenv.load_dotenv()
 

@@ -3,19 +3,11 @@ from pathlib import Path
 
 # 动态添加src目录到路径
 project_root = Path(__file__).parent.parent
-src_path = project_root / 'src'
-sys.path.insert(0, str(src_path))
+ui_path = project_root / 'ui'
+sys.path.insert(0, str(ui_path))
 
-import polars as pl
-import numpy as np
-from scipy.ndimage import center_of_mass
-from scipy.optimize import curve_fit
-from scipy.fft import fft2, ifftshift, fftshift
-from scipy.interpolate import RegularGridInterpolator
-import cv2
-import math
 
-from data_mining.image.common import read_tiff_to_numpy, get_profiles, convert_to_cv
+from analysis.image.common import read_tiff_to_numpy, get_profiles, convert_to_cv
 
 root_dir = Path('./data/002')
 assert root_dir.exists(), f"数据目录不存在: {root_dir}"

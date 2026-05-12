@@ -1,22 +1,8 @@
 import os
 import sys
-sys.path.append('./src')
+sys.path.append('./ui')
 
-import pandas as pd
-
-import numpy as np
-from scipy.ndimage import center_of_mass
-from scipy.optimize import curve_fit
-from scipy.fft import fft2, ifftshift, fftshift
-from scipy.interpolate import RegularGridInterpolator
-import cv2
-import math
-
-from pathlib import Path
-import swifter
-import dotenv
-
-from data_mining.image.common import get_profiles, read_tiff_to_numpy
+from analysis.image.common import get_profiles, read_tiff_to_numpy
 dotenv.load_dotenv('.')
 
 exp_dir = os.environ.get('EXP_DIR', 'X:/')

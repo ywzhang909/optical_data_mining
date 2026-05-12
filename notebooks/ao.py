@@ -1,21 +1,10 @@
 # %%
 import sys
 from pathlib import Path
-sys.path.append('../src')
+sys.path.append('../ui')
 
-import pandas as pd
-import aotools
-
-import numpy as np
-from scipy.ndimage import center_of_mass
-from scipy.optimize import curve_fit
-from scipy.fft import fft2, fftshift
-import cv2
-import matplotlib.pyplot as plt
-from matplotlib.patches import Circle, Ellipse
-
-from data_mining.image.common import *
-from data_mining.optical_analysis.beam_analysis import *
+from analysis.image.common import *
+from analysis.optical_analysis.beam_analysis import *
 
 FOCAL_CAM_PIXEL = 2.9e-6
 AXIS_CAM_PIXEL = 5.5e-6

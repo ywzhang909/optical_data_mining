@@ -1,7 +1,7 @@
 import sys
 from pathlib import Path
 
-# 动态添加src目录到路径
+# 添加ui目录到Python路径，以便导入analysis模块
 project_root = Path(__file__).parent.parent
 ui_path = project_root / 'ui'
 sys.path.insert(0, str(ui_path))
@@ -598,7 +598,7 @@ valid_pupil_beam = valid_pupil_beam.hstack(radius_feature)
 radius_feature.plot(subplots=True)
 
 # %%
-# TODO zernike 
+# TODO zernike
 
 # %% [markdown]
 # # 光瞳光轴对齐

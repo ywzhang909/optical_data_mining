@@ -1,17 +1,27 @@
 # %%
 import sys
 from pathlib import Path
+
 sys.path.append('../ui')
 
-from analysis.image.common import *
-from analysis.optical_analysis.beam_analysis import *
+import numpy as np
+import pandas as pd
+from matplotlib import pyplot as plt
+from PIL import Image
+from scipy.ndimage import center_of_mass
+from scipy.optimize import curve_fit
+
+from analysis.image.common import read_tiff_to_numpy
+from analysis.optical_analysis.beam_analysis import (
+    gaussian, fitting_gaussian, center_of_mass_numpy, d4sigma, pib_ratio,
+    calculate_xy_diameters,
+)
 
 FOCAL_CAM_PIXEL = 2.9e-6
 AXIS_CAM_PIXEL = 5.5e-6
 
 plt.gray()
 # %%
-from PIL import Image
 axis_image = Image.open(r"D:\Projects\TIFO\data-mining\data\AO调试数据\20260326\调控区image\光轴image\（AO闭环）20260326 17：09：49(全子束-40W-平顶-5s)\20260326 17：09：49.79.jpg")
 axis_array = np.array(axis_image)
 h,w = axis_array.shape

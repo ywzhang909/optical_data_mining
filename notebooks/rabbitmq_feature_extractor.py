@@ -6,10 +6,12 @@ RabbitMQ光斑特征提取服务
 import os
 import sys
 import json
-import pika
+
+import dotenv
 import numpy as np
-import pandas as pd
 from pathlib import Path
+
+import pika
 
 sys.path.append('./ui')
 

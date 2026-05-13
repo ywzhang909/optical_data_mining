@@ -6,15 +6,17 @@ RabbitMQ光斑特征提取服务
 import os
 import sys
 import json
-import pika
-import numpy as np
-import pandas as pd
-from pathlib import Path
-
-sys.path.append('./src')
 
 import dotenv
-from data_mining.image.common import get_profiles, read_tiff_to_numpy
+import numpy as np
+from pathlib import Path
+
+import pika
+
+sys.path.append('./ui')
+
+
+from analysis.image.common import get_profiles, read_tiff_to_numpy
 
 dotenv.load_dotenv()
 

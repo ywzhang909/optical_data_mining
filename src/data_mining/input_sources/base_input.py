@@ -1,21 +1,21 @@
 from abc import ABC, abstractmethod
-from typing import Generic, TypeVar, Optional
-import pandas as pd
+from typing import Generic, TypeVar
 
-T = TypeVar('T')
+T_co = TypeVar("T_co")
 
-class InputSource(Generic[T], ABC):
+
+class InputSource(ABC, Generic[T_co]):
     """Input source interface: reads data and returns type T"""
 
-    def __init__(self, config: Optional[object] = None):
+    def __init__(self, config: object | None = None):
         self.config = config
 
     @abstractmethod
-    def read(self) -> T:
+    def read(self) -> T_co:
         """Read data from the input source"""
         raise NotImplementedError
 
     @abstractmethod
-    def validate(self, data: T) -> bool:
+    def validate(self, data: T_co) -> bool:
         """Validate the read data"""
         raise NotImplementedError

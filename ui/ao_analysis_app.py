@@ -12,31 +12,22 @@ AO光束质量分析Streamlit应用
 - BPP (Beam Parameter Product) 计算
 """
 
-import streamlit as st
-import numpy as np
-from loguru import logger
 import sys
 from datetime import datetime
+
+import numpy as np
 import pandas as pd
-import os
-from pathlib import Path
+import streamlit as st
 
-# 添加src目录到Python路径，以便正确导入模块
-src_path = Path(__file__).parent.parent / "src"
-if str(src_path) not in sys.path:
-    sys.path.insert(0, str(src_path))
-
-# 导入光束分析模块
-from data_mining.optical_analysis import (
+# 导入光束分析模块（analysis/ 是 ui/ 的子包）
+from analysis.optical_analysis import (
     BeamAnalysisMetrics,
     HistoryManager,
-    plot_beam_visualization,
     plot_3d_visualization,
-    plot_multiple_beams_3d,
+    plot_beam_visualization,
     read_image_to_numpy,
-    subtract_dark_field,
 )
-
+from loguru import logger
 
 # 配置loguru：移除默认handler，添加INFO级别handler
 logger.remove()
@@ -47,9 +38,7 @@ def main():
     st.set_page_config(page_title="AO光束质量分析", page_icon="🔬", layout="wide")
 
     st.title("🔬 AO光束质量分析")
-    st.markdown(
-        "上传一张**光轴(axis)**图片和一张**光瞳(pupil)**图片，自动计算相关特征量并可视化结果"
-    )
+    st.markdown("上传一张**光轴(axis)**图片和一张**光瞳(pupil)**图片，自动计算相关特征量并可视化结果")
 
     # 侧边栏 - 参数设置
     st.sidebar.header("参数设置")
@@ -61,12 +50,8 @@ def main():
 
     # 相机参数
     st.sidebar.subheader("相机参数")
-    axis_pixel_um = st.sidebar.number_input(
-        "光轴相机像素尺寸 (μm)", value=2.9, format="%.2f"
-    )
-    pupil_pixel_um = st.sidebar.number_input(
-        "光瞳相机像素尺寸 (μm)", value=2.9 * 20, format="%.2f"
-    )
+    axis_pixel_um = st.sidebar.number_input("光轴相机像素尺寸 (μm)", value=2.9, format="%.2f")
+    pupil_pixel_um = st.sidebar.number_input("光瞳相机像素尺寸 (μm)", value=2.9 * 20, format="%.2f")
 
     # 处理参数
     st.sidebar.subheader("处理参数")
@@ -248,39 +233,26 @@ def main():
                 img_array = np.asarray(img, dtype=np.float64)
 
                 if img_array.size == 0 or img_array.ndim != 2:
-                    st.warning(
-                        f"{name} has invalid dimensions, using axis image as fallback"
-                    )
+                    st.warning(f"{name} has invalid dimensions, using axis image as fallback")
                     return axis_shifted
 
                 # Check if image is all zeros or nearly uniform (would appear black)
-                if (
-                    np.allclose(img_array, 0)
-                    or abs(img_array.max() - img_array.min()) < 1e-10
-                ):
-                    st.warning(
-                        f"{name} has no contrast, generating Gaussian beam as fallback"
-                    )
+                if np.allclose(img_array, 0) or abs(img_array.max() - img_array.min()) < 1e-10:
+                    st.warning(f"{name} has no contrast, generating Gaussian beam as fallback")
                     # Generate a simple Gaussian beam for visualization
                     h, w = img_array.shape
                     cy, cx = h // 2, w // 2
                     Y, X = np.ogrid[:h, :w]
                     # Create Gaussian with reasonable spread
                     sigma = min(h, w) / 8
-                    gaussian_beam = np.exp(
-                        -((X - cx) ** 2 + (Y - cy) ** 2) / (2 * sigma**2)
-                    )
+                    gaussian_beam = np.exp(-((X - cx) ** 2 + (Y - cy) ** 2) / (2 * sigma**2))
                     return gaussian_beam
 
                 return img_array
 
             axis_validated = validate_and_fix_image(axis_shifted, "Axis Shifted Image")
-            pupil_validated = validate_and_fix_image(
-                pupil_shifted, "Pupil Shifted Image"
-            )
-            ideal_validated = validate_and_fix_image(
-                ideal_matched, "Ideal Matched Image"
-            )
+            pupil_validated = validate_and_fix_image(pupil_shifted, "Pupil Shifted Image")
+            ideal_validated = validate_and_fix_image(ideal_matched, "Ideal Matched Image")
             zmin, zmax = None, None
             # 计算统一尺度
             # zmin = min(
@@ -337,16 +309,12 @@ def main():
 
             # Axis visualization (2D) - Using Plotly now
             st.subheader("Axis Image Visualization - 2D")
-            axis_fig = plot_beam_visualization(
-                axis_img, "Axis", axis_pixel_um, results["axis_features"]
-            )
+            axis_fig = plot_beam_visualization(axis_img, "Axis", axis_pixel_um, results["axis_features"])
             st.plotly_chart(axis_fig, use_container_width=True)
 
             # Pupil visualization (2D) - Using Plotly now
             st.subheader("Pupil Image Visualization - 2D")
-            pupil_fig = plot_beam_visualization(
-                pupil_img, "Pupil", pupil_pixel_um, results["pupil_features"]
-            )
+            pupil_fig = plot_beam_visualization(pupil_img, "Pupil", pupil_pixel_um, results["pupil_features"])
             st.plotly_chart(pupil_fig, use_container_width=True)
 
             # Results summary
@@ -390,9 +358,7 @@ def main():
 
             # 下载结果
             csv = results_df.to_csv(index=False)
-            st.download_button(
-                "📥 下载结果CSV", csv, "ao_analysis_results.csv", "text/csv"
-            )
+            st.download_button("📥 下载结果CSV", csv, "ao_analysis_results.csv", "text/csv")
 
             # 历史记录管理
             st.sidebar.header("历史记录管理")
@@ -405,9 +371,7 @@ def main():
                 # Allow loading of a previous session
                 st.sidebar.subheader("加载已有会话")
                 session_options = [session.name for session in sessions]
-                selected_session = st.sidebar.selectbox(
-                    "选择会话", options=session_options
-                )
+                selected_session = st.sidebar.selectbox("选择会话", options=session_options)
                 if st.sidebar.button("加载选中会话"):
                     selected_path = history_manager.base_dir / selected_session
                     session_data = history_manager.load_session_results(selected_path)

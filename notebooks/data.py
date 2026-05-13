@@ -1,22 +1,12 @@
 import os
 import sys
-sys.path.append('./src')
 
-import pandas as pd
+sys.path.append('./ui')
 
-import numpy as np
-from scipy.ndimage import center_of_mass
-from scipy.optimize import curve_fit
-from scipy.fft import fft2, ifftshift, fftshift
-from scipy.interpolate import RegularGridInterpolator
-import cv2
-import math
-
-from pathlib import Path
-import swifter
 import dotenv
 
-from data_mining.image.common import get_profiles, read_tiff_to_numpy
+from analysis.image.common import get_profiles, read_tiff_to_numpy
+
 dotenv.load_dotenv('.')
 
 exp_dir = os.environ.get('EXP_DIR', 'X:/')
@@ -752,7 +742,7 @@ def process_all(axis_beam_dir, pupil_beam_dir, exp_id):
     lambda row: calculate_bpp_from_pupil_and_focal(row['avg_sigma2_pupil'], row['avg_sigma2_axis']),
     axis=1, result_type='expand')
 
-    merged_beam = pd.merge(merged_beam, bpp_results, left_index=True, right_index=True) 
+    merged_beam = pd.merge(merged_beam, bpp_results, left_index=True, right_index=True)
 
     # merged_beam['path'] = merged_beam['path'].astype(str)
     # merged_beam['time'] = merged_beam['time'].astype(str)

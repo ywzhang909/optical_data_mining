@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "plotly": {
+      "source": "davila7/claude-code-templates",
+      "sourceType": "github",
+      "skillPath": "cli-tool/components/skills/scientific/plotly/SKILL.md",
+      "computedHash": "4fdf1d51109325319d58807609509b26e932a42acb4612c72cfbe40bb8316013"
+    }
+  }
+}

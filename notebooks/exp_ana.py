@@ -84,11 +84,11 @@ hel_exp["_sub_beam"] = hel_exp.apply(compute_sub_beam, axis=1)
 exp_params = [
 'experiment_polarization_state',
        'experiment_radiation_mode', 'experiment_radiation_duration',
-       'experiment_radiation_power', 
+       'experiment_radiation_power',
        '横向风', '厚度', '靶材', '距离', '靶材厚度', '靶材形状', '材质',
        '纵向风', '湍流', '通风', '_sub_beam'
 ]
-# 
+#
 hel_exp[exp_params].isna().all(axis=1).value_counts()
 # %% 找出出光属性任一为空的行：0
 laser_params = [
@@ -142,7 +142,7 @@ hel_exp['靶材厚度'].value_counts()
 # hel_exp['材质'].value_counts()
 hel_exp['靶材'] = hel_exp.apply(lambda x: x['材质'] if \
                 (pd.isna(x['靶材']) or (x['靶材'] == '纯铝')) else x['靶材'], axis=1)
-# %% 
+# %%
 target_params = [
        '靶材',
     #    '距离',

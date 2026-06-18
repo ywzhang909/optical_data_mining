@@ -1,10 +1,11 @@
 [project]
 name = "data-miner"
 version = "0.1.0"
-description = "Add your description here"
+description = "Laser beam quality analysis toolkit — message queue input sources + analysis UI"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "aotools>=1.0.7",
     "fastapi==0.104.1",
     "httpx>=0.28.1",
     "loguru>=0.7.3",
@@ -15,46 +16,25 @@ dependencies = [
     "opencv-python>=4.11.0.86",
     "openpyxl>=3.1.5",
     "pandas>=2.3.0",
+    "pillow>=12.0.0",
     "plotly>=6.1.2",
     "pydantic==2.4.2",
-    "pytest==7.4.3",
-    "pygwalker>=0.4.9.15",
-    "pymysql",
-    "scikit-learn>=1.7.0",
-    "tqdm>=4.67.1",
+    "scikit-image>=0.26.0",
+    "scipy>=1.16.3",
+    "singleton-decorator>=1.0.0",
+    "streamlit",
     "uvicorn==0.24.0",
     "zernike>=0.0.33",
-    "singleton-decorator>=1.0.0",
-    "nbstripout>=0.8.2",
-    "swanlab>=0.7.5",
-    "swifter>=1.4.0",
-    "statsmodels>=0.14.6",
-    "runcell>=0.1.14",
-    "scikit-image>=0.26.0",
-    "statsmodels>=0.14.6",
-    "sqlalchemy>=2.0.45",
-    "dotenv>=0.9.9",
-    "ryven>=3.4.0",
-    "polars>=1.36.1",
-    "bm3d>=4.0.0",
-    "PyWavelets>=1.4.0",
-    "aotools>=1.0.7",
-    "streamlit",
 ]
 
-[dependency-groups]
+[project.optional-dependencies]
+kafka = ["kafka-python>=2.0.2"]
+rabbitmq = ["pika>=1.3.0"]
+bm3d = ["bm3d>=4.0.0"]
 dev = [
     "ipykernel>=6.29.5",
-]
-
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-markers = [
-    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-]
-filterwarnings = [
-    "ignore::DeprecationWarning",
+    "pytest>=7.4.0",
+    "ruff>=0.3.0",
 ]
 
 [build-system]
@@ -63,6 +43,56 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = ["data_mining"]
+package-dir = {"" = "src"}
 
-[tool.setuptools.package-dir]
-data_mining = "src/data_mining"
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "F",  # pyflakes
+    "W",  # pycodestyle warnings
+    "I",  # isort
+    "N",  # pep8-naming
+    "UP",  # pyupgrade
+    "B",  # flake8-bugbear
+    "SIM",  # flake8-simplify
+]
+ignore = [
+    "E501",  # line too long — we use 120 already
+    "N801",  # class names — allow Chinese docstrings
+    "N806",  # variable names — physics notation (F, Ex, X, Y, Z, NA)
+    "N803",  # argument names — physics notation
+    "W293",  # blank line whitespace in docstrings — pervasive in Chinese docs
+    "SIM108",  # ternary simplification — hurts readability
+]
+
+[tool.ruff.lint.per-file-ignores]
+"notebooks/*" = ["F403", "F405", "I001"]
+"tests/*" = ["N802", "N803", "N806", "N801"]
+"ui/analysis/optical_analysis/diffraction.py" = ["N806", "N803", "F841"]
+"ui/analysis/optical_analysis/visualization/beam_visualization.py" = ["N806"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "ui"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::UserWarning",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "kafka: tests requiring kafka-python",
+    "rabbitmq: tests requiring pika",
+    "aotools: tests requiring aotools",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.12",
+]

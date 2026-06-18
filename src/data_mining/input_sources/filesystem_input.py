@@ -1,11 +1,12 @@
-from typing import List, Optional
-import os
-import pandas as pd
 from pathlib import Path
+
+import pandas as pd
+
 from .base_input import InputSource
 
+
 class FileSystemInput(InputSource[pd.DataFrame]):
-    def __init__(self, directory: str, config: Optional[object] = None):
+    def __init__(self, directory: str, config: object | None = None):
         super().__init__(config)
         self.directory = Path(directory)
 
@@ -13,14 +14,14 @@ class FileSystemInput(InputSource[pd.DataFrame]):
         if not self.directory.exists() or not self.directory.is_dir():
             raise FileNotFoundError(f"Directory not found: {self.directory}")
 
-        frames: List[pd.DataFrame] = []
-        for p in sorted(self.directory.glob('*')):
+        frames: list[pd.DataFrame] = []
+        for p in sorted(self.directory.glob("*")):
             if p.is_file():
-                if p.suffix.lower() in ['.csv']:
+                if p.suffix.lower() in [".csv"]:
                     frames.append(pd.read_csv(p))
-                elif p.suffix.lower() in ['.json']:
+                elif p.suffix.lower() in [".json"]:
                     frames.append(pd.read_json(p))
-                elif p.suffix.lower() in ['.jsonl', '.ndjson']:
+                elif p.suffix.lower() in [".jsonl", ".ndjson"]:
                     frames.append(pd.read_json(p, lines=True))
         if not frames:
             return pd.DataFrame()

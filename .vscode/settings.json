@@ -3,10 +3,14 @@
         "file:/**/*.csv": "jupyter-data-wrangler"
     },
     "python.defaultInterpreterPath": "d:\\Projects\\TIFO\\data-mining\\.venv\\Scripts\\python.exe",
+    "python.terminal.activateEnvironment": true,
     "python.analysis.extraPaths": [
         "${workspaceFolder}/src"
     ],
     "python.envFile": "${workspaceFolder}/.env",
+    "terminal.integrated.env.windows": {
+        "PYTHONPATH": "${workspaceFolder}/src;${env:PYTHONPATH}"
+    },
     "files.exclude": {
         "**/.git": true,
         "**/.svn": true,

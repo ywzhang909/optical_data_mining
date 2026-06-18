@@ -8,12 +8,12 @@
 - 图像读取
 - 图像去暗场处理
 """
-
-from pathlib import Path
-
-import numpy as np
 import math
+from pathlib import Path
+from typing import Optional
+
 import cv2
+import numpy as np
 from PIL import Image
 
 
@@ -78,7 +78,7 @@ def subtract_dark_field(
     img_array: np.ndarray,
     denoise_method: str = "none",
     manual_threshold: Optional[float] = None,
-) -> Tuple[np.ndarray, float]:
+) -> tuple[np.ndarray, float]:
     """
     暗场校正：计算背景阈值并从图像中减去
 
@@ -135,7 +135,7 @@ def normalize_image(
 
 
 def resize_image(
-    img: np.ndarray, size: Tuple[int, int], interpolation: str = "bilinear"
+    img: np.ndarray, size: tuple[int, int], interpolation: str = "bilinear"
 ) -> np.ndarray:
     """
     调整图像大小

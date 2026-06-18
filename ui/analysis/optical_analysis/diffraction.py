@@ -10,8 +10,23 @@
 """
 
 import numpy as np
-from aotools.opticalpropagation import twoStepFresnel
 from loguru import logger
+
+try:
+    from aotools.opticalpropagation import twoStepFresnel
+except ImportError as exc:
+    twoStepFresnel = None
+    _AOTOOLS_IMPORT_ERROR = exc
+else:
+    _AOTOOLS_IMPORT_ERROR = None
+
+
+def _require_aotools() -> None:
+    if twoStepFresnel is None:
+        raise RuntimeError(
+            "aotools is required for fnr3, propagate_through_lens, and Strehl propagation. "
+            "Install the project dependencies or repair the local aotools/numba installation."
+        ) from _AOTOOLS_IMPORT_ERROR
 
 
 def crop_to_square(img: np.ndarray) -> np.ndarray:
@@ -215,6 +230,8 @@ def fnr3(
 
     # logger.debug(f"Input power: {np.sum(np.abs(Ex)**2) * dx1 * dy1:.6e}")
     # logger.debug(f"Output power: {np.sum(np.abs(Ex2)**2) * dx2 * dy2:.6e}")
+    _require_aotools()
+    assert twoStepFresnel is not None
     Ex2 = twoStepFresnel(Ex, lambda_m, dx1, dx2, zz)
 
     return Ex2
@@ -258,6 +275,8 @@ def calculate_strehl_ratio_with_energy_conservation(
     k = 2 * np.pi / wavelength_m
     lens_phase = np.exp(-1j * k * (X**2 + Y**2) / (2 * f_m))
     E_in = complex(1) * pupil_img * lens_phase
+    _require_aotools()
+    assert twoStepFresnel is not None
     E_out = twoStepFresnel(E_in, wavelength_m, input_pixel_size, output_pixel_size, f_m)
 
     ideal_focus_intensity = np.abs(E_out) ** 2

@@ -14,38 +14,33 @@ AO光束质量分析Streamlit应用
 """
 
 import sys
-from datetime import datetime
+from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import streamlit as st
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.patches import Circle
 import plotly.graph_objects as go
+import streamlit as st
 from loguru import logger
-import sys
+from matplotlib.patches import Circle
 
+UI_ROOT = Path(__file__).resolve().parent
+if str(UI_ROOT) not in sys.path:
+    sys.path.insert(0, str(UI_ROOT))
 
 # 导入光束分析模块
-from data_mining.optical_analysis import (
+from analysis.optical_analysis import (  # noqa: E402
+    calculate_bpp,
+    calculate_xy_diameters,
     d4sigma,
     pib_ratio,
-    calculate_xy_diameters,
-    calculate_bpp,
-)
-
-# 导入衍射计算模块
-from data_mining.optical_analysis import (
+    read_image_to_numpy,
     shift_to_center_fft,
+    subtract_dark_field,
     calculate_strehl_ratio_with_energy_conservation,
 )
-
-# 导入图像处理工具
-from data_mining.optical_analysis import (
-    read_image_to_numpy,
-    subtract_dark_field,
-    find_spot_border,
+from analysis.optical_analysis.image_utils import find_spot_border  # noqa: E402
+from analysis.optical_analysis.uniform_analysis import (  # noqa: E402
     calculate_uniformity_metrics,
     plot_uniformity_analysis,
 )

@@ -17,6 +17,8 @@ import numpy as np
 from scipy.ndimage import center_of_mass
 from scipy.optimize import curve_fit
 
+from ..image.common import compute_radial_profile
+
 
 def gaussian(x: np.ndarray, mu: float, sigma: float, A: float, b: float) -> np.ndarray:
     """
@@ -220,6 +222,132 @@ def calculate_xy_diameters(
     y_diameter = 2 * sigma * pix_size if not np.isnan(sigma) else 0
 
     return {"gaussian_dia_x(um)": x_diameter, "gaussian_dia_y(um)": y_diameter}
+
+
+def _ftl_model(R: np.ndarray, I0: float, R_FL: float, q: float) -> np.ndarray:
+    """
+    Flat-Topped Lorentz (FTL) 光束模型
+
+    I(R) = I0 / [1 + (R/R_FL)^q] ^ (1 + 2/q)
+
+    Args:
+        R: 径向距离数组（像素）
+        I0: 中心强度
+        R_FL: 特征半径（像素）
+        q: 平顶阶数
+
+    Returns:
+        模型强度值数组
+    """
+    # 防止除零
+    with np.errstate(divide="ignore", invalid="ignore"):
+        result = I0 / (1 + (R / np.maximum(R_FL, 1e-10)) ** q) ** (1 + 2.0 / q)
+    result[~np.isfinite(result)] = 0.0
+    return result
+
+
+def fit_flat_topped_lorentz(
+    image: np.ndarray,
+    cx: float,
+    cy: float,
+    pixel_size: float = 1.0,
+    max_radius: int | None = None,
+    radial_step: float = 1.0,
+) -> dict[str, Any]:
+    """
+    对光瞳图像进行 FTL (Flat-Topped Lorentz) 模型拟合，计算特征半径 R_FL。
+
+    处理流程:
+        1. 使用 compute_radial_profile() 计算径向剖面 Ī(R)
+        2. 使用 scipy.optimize.curve_fit 拟合三参数 (I0, R_FL, q)
+        3. 从协方差矩阵估计参数误差
+
+    Args:
+        image: 去暗场后的二维光强图像
+        cx: 质心 X 坐标（像素）
+        cy: 质心 Y 坐标（像素）
+        pixel_size: 像素尺寸（微米/像素）
+        max_radius: 最大拟合半径（像素）。None 时自动取 min(cx, cy, w-cx, h-cy)
+        radial_step: 径向分箱的步长（像素），默认 1.0
+
+    Returns:
+        dict 包含以下键:
+            - R_FL: 特征半径 (μm)
+            - R_FL_pixels: 特征半径 (像素)
+            - q: 平顶阶数
+            - I0: 拟合中心强度
+            - R_FL_error: R_FL 的标准误差 (μm)
+            - q_error: q 的标准误差
+            - I0_error: I0 的标准误差
+            - radial_R: 径向距离数组 (像素)
+            - radial_intensity: 径向平均强度数组
+            - fitted_intensity: FTL 拟合强度数组
+            - success: 拟合是否成功
+            - message: 状态描述
+    """
+    # 1. 计算径向剖面（共用工具函数）
+    profile = compute_radial_profile(
+        image, cx, cy,
+        max_radius=max_radius,
+        radial_step=radial_step,
+        min_pixels_per_bin=3,
+    )
+    if not profile["success"]:
+        return {"success": False, "message": profile["message"]}
+
+    # 2. 提取有效数据点用于拟合
+    valid_mask = profile["valid_mask"]
+    if np.sum(valid_mask) < 5:
+        return {"success": False, "message": f"有效径向数据点不足 ({np.sum(valid_mask)} < 5)"}
+
+    R_fit = profile["radial_R"][valid_mask]
+    I_fit = profile["radial_intensity"][valid_mask]
+
+    # 3. 非线性最小二乘拟合
+    I0_guess = float(max(I_fit[0], np.max(image)))
+    max_r = profile["max_radius"]
+    R_FL_guess = float(max_r * 0.3)
+    q_guess = 4.0
+
+    try:
+        popt, pcov = curve_fit(
+            _ftl_model,
+            R_fit,
+            I_fit,
+            p0=[I0_guess, R_FL_guess, q_guess],
+            bounds=([0.0, 0.0, 1.5], [np.inf, float(max_r), 50.0]),
+            maxfev=10000,
+        )
+
+        I0_fit, R_FL_fit, q_fit = popt
+        perr = np.sqrt(np.diag(pcov))
+        I0_err, R_FL_err, q_err = perr
+
+        fitted_intensity = _ftl_model(R_fit, I0_fit, R_FL_fit, q_fit)
+
+        success = True
+        message = "拟合成功"
+    except (RuntimeError, ValueError) as e:
+        I0_fit, R_FL_fit, q_fit = np.nan, np.nan, np.nan
+        I0_err, R_FL_err, q_err = np.nan, np.nan, np.nan
+        fitted_intensity = np.full_like(R_fit, np.nan)
+        success = False
+        message = f"拟合失败: {e}"
+
+    return {
+        "R_FL": float(R_FL_fit) * pixel_size,
+        "R_FL_pixels": float(R_FL_fit),
+        "q": float(q_fit),
+        "I0": float(I0_fit),
+        "R_FL_error": float(R_FL_err) * pixel_size,
+        "q_error": float(q_err),
+        "I0_error": float(I0_err),
+        "radial_R": profile["radial_R"] * pixel_size,
+        "radial_intensity": profile["radial_intensity"],
+        "fitted_intensity": fitted_intensity,
+        "success": success,
+        "message": message,
+    }
 
 
 def calculate_bpp(

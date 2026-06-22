@@ -17,6 +17,7 @@ from analysis.optical_analysis.beam_analysis import (
     center_of_mass_numpy,
     d4sigma,
     extract_beam_features,
+    fit_flat_topped_lorentz,
     fitting_gaussian,
     gaussian,
     pib_ratio,
@@ -473,3 +474,142 @@ class TestCalculateBackgroundThreshold:
         img[5, 5] = 50
         threshold = calculate_background_threshold(img, method="min")
         assert threshold == 50
+
+
+# =============================================================================
+# Test: beam_analysis.py — fit_flat_topped_lorentz()
+# =============================================================================
+
+
+def make_ftl_beam(
+    size: int = 64, R_FL: float = 12, q: float = 4, I0: float = 255
+) -> np.ndarray:
+    """Create a synthetic Flat-Topped Lorentz beam with known parameters."""
+    y, x = np.ogrid[:size, :size]
+    cx, cy = size // 2, size // 2
+    R = np.sqrt((x - cx) ** 2 + (y - cy) ** 2)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        beam = I0 / (1 + (R / R_FL) ** q) ** (1 + 2.0 / q)
+    beam[~np.isfinite(beam)] = 0.0
+    return beam.astype(np.float64)
+
+
+class TestFlatToppedLorentz:
+    def test_ftl_model_returns_expected_shape(self):
+        """_ftl_model should return array of same length as input R."""
+        from analysis.optical_analysis.beam_analysis import _ftl_model
+
+        R = np.linspace(0, 30, 100)
+        result = _ftl_model(R, I0=255, R_FL=10, q=4)
+        assert result.shape == (100,)
+        assert np.all(result >= 0)
+
+    def test_ftl_model_peak_at_center(self):
+        """FTL model should peak at R=0 with value I0."""
+        from analysis.optical_analysis.beam_analysis import _ftl_model
+
+        R = np.linspace(0, 30, 100)
+        result = _ftl_model(R, I0=255, R_FL=10, q=4)
+        assert abs(result[0] - 255) < 1e-6
+        # Intensity should decrease monotonically
+        assert all(result[i] >= result[i + 1] for i in range(len(result) - 1))
+
+    def test_ftl_model_high_q_approaches_tophat(self):
+        """As q→∞, FTL approaches a tophat (sharp edge at R=R_FL)."""
+        from analysis.optical_analysis.beam_analysis import _ftl_model
+
+        R = np.linspace(0, 30, 300)
+        result = _ftl_model(R, I0=255, R_FL=10, q=30)
+        # Near center (R << R_FL), intensity should be close to I0
+        assert abs(result[0] - 255) < 1e-6
+        # At R/R_FL = 1, intensity = I0 / 2^(1+2/q)
+        r_ratio = R / 10  # R / R_FL
+        idx_one = np.argmin(np.abs(r_ratio - 1.0))
+        expected = 255.0 / 2.0 ** (1.0 + 2.0 / 30.0)
+        # Allow tolerance for finite R grid sampling
+        assert abs(result[idx_one] - expected) < 8, (
+            f"At R=R_FL: {result[idx_one]} != {expected}"
+        )
+
+    def test_fit_recovers_parameters(self):
+        """fit_flat_topped_lorentz should recover R_FL and q for noiseless data."""
+        size = 128
+        R_FL_true = 15.0
+        q_true = 5.0
+        I0_true = 200.0
+
+        beam = make_ftl_beam(size=size, R_FL=R_FL_true, q=q_true, I0=I0_true)
+        cx, cy = size // 2, size // 2
+
+        result = fit_flat_topped_lorentz(beam, cx, cy, pixel_size=1.0)
+
+        assert result["success"], f"Fitting failed: {result['message']}"
+        # Recovered R_FL should be close to true value (allow 10% tolerance)
+        assert abs(result["R_FL_pixels"] - R_FL_true) / R_FL_true < 0.15, (
+            f"R_FL mismatch: {result['R_FL_pixels']} vs {R_FL_true}"
+        )
+        # Recovered q should be close to true value
+        assert abs(result["q"] - q_true) / q_true < 0.2, (
+            f"q mismatch: {result['q']} vs {q_true}"
+        )
+        # Recovered I0 should be close to true value
+        assert abs(result["I0"] - I0_true) / I0_true < 0.15, (
+            f"I0 mismatch: {result['I0']} vs {I0_true}"
+        )
+
+    def test_fit_returns_correct_keys(self):
+        """fit_flat_topped_lorentz should return dict with expected keys."""
+        beam = make_ftl_beam(size=64, R_FL=10, q=4, I0=200)
+        cx, cy = 32, 32
+        result = fit_flat_topped_lorentz(beam, cx, cy, pixel_size=1.0)
+
+        expected_keys = {
+            "R_FL", "R_FL_pixels", "q", "I0",
+            "R_FL_error", "q_error", "I0_error",
+            "radial_R", "radial_intensity", "fitted_intensity",
+            "success", "message",
+        }
+        assert expected_keys.issubset(result.keys()), (
+            f"Missing keys: {expected_keys - set(result.keys())}"
+        )
+
+    def test_fit_with_noise_still_converges(self):
+        """Fitting with moderate noise should still converge (within tolerance)."""
+        rng = np.random.default_rng(42)
+        beam = make_ftl_beam(size=64, R_FL=10, q=4, I0=200)
+        beam_noisy = beam + rng.normal(0, 10, size=beam.shape)
+        beam_noisy = np.maximum(beam_noisy, 0)
+
+        cx, cy = 32, 32
+        result = fit_flat_topped_lorentz(beam_noisy, cx, cy, pixel_size=1.0)
+
+        assert result["success"], f"Fitting failed with noise: {result['message']}"
+        assert result["R_FL_pixels"] > 0
+        assert result["q"] > 0
+
+    def test_small_image_returns_failure(self):
+        """Very small image should return failure gracefully."""
+        beam = np.ones((2, 2), dtype=np.float64)
+        result = fit_flat_topped_lorentz(beam, 1, 1, pixel_size=1.0)
+        assert not result["success"]
+        assert "过小" in result["message"]
+
+    def test_zero_image_returns_failure(self):
+        """All-zero image should return failure gracefully."""
+        beam = np.zeros((32, 32), dtype=np.float64)
+        result = fit_flat_topped_lorentz(beam, 16, 16, pixel_size=1.0)
+        assert not result["success"]
+
+    def test_pixel_size_scaling(self):
+        """R_FL should scale with pixel_size."""
+        beam = make_ftl_beam(size=64, R_FL=10, q=4, I0=200)
+        cx, cy = 32, 32
+
+        r1 = fit_flat_topped_lorentz(beam, cx, cy, pixel_size=1.0)
+        r2 = fit_flat_topped_lorentz(beam, cx, cy, pixel_size=2.0)
+
+        assert r1["success"] and r2["success"]
+        # R_FL in microns should be 2x when pixel_size is 2x
+        assert abs(r2["R_FL"] - 2 * r1["R_FL"]) < 1e-6
+        # R_FL in pixels should be the same
+        assert abs(r2["R_FL_pixels"] - r1["R_FL_pixels"]) < 1e-6

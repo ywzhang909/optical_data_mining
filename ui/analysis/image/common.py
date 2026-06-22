@@ -181,6 +181,92 @@ def get_profiles(img, center, line_width=5):
     return {"vertical": vertical, "horizontal": horizontal}
 
 
+def compute_radial_profile(
+    image: np.ndarray,
+    cx: float,
+    cy: float,
+    max_radius: int | None = None,
+    radial_step: float = 1.0,
+    min_pixels_per_bin: int = 3,
+) -> dict[str, Any]:
+    """
+    计算图像的径向强度分布（方位角平均）。
+
+    以 (cx, cy) 为原点，对每个像素计算径向距离，按距离分箱后
+    取每箱内的平均强度，得到径向剖面 Ī(R)。
+
+    处理流程:
+        1. 计算每个像素到原点的径向距离
+        2. 按 radial_step 步长分箱
+        3. 对每箱内的像素取方位角平均强度
+        4. 标记像素数不足的箱为无效 (pixel_count < min_pixels_per_bin)
+
+    Args:
+        image: 二维光强图像
+        cx: 原点 X 坐标（像素）
+        cy: 原点 Y 坐标（像素）
+        max_radius: 最大计算半径（像素）。None 时自动取图像内最大有效半径。
+        radial_step: 径向分箱步长（像素），默认 1.0
+        min_pixels_per_bin: 每箱最少像素数，低于此值的箱视为无效
+
+    Returns:
+        dict 包含以下键:
+            - radial_R: 径向距离数组 (像素)
+            - radial_intensity: 径向平均强度数组
+            - pixel_count: 每箱像素数数组
+            - valid_mask: 有效数据点掩码 (bool array)，满足 (R <= max_radius) & (pixel_count >= min_pixels_per_bin)
+            - max_radius: 实际使用的最大半径
+            - success: 是否成功（图像有效且有数据）
+            - message: 状态描述
+    """
+    img = np.asarray(image, dtype=np.float64)
+    h, w = img.shape
+
+    if h < 3 or w < 3:
+        return {"success": False, "message": "图像尺寸过小"}
+    if np.max(img) <= 0:
+        return {"success": False, "message": "图像无有效信号（最大值 ≤ 0）"}
+
+    # 计算最大有效半径
+    if max_radius is None:
+        max_radius = int(min(cx, cy, w - cx - 1, h - cy - 1))
+    max_radius = max(1, min(max_radius, int(np.sqrt(h**2 + w**2))))
+
+    # 1. 计算每个像素的径向距离
+    y_idx, x_idx = np.indices(img.shape)
+    R = np.sqrt((x_idx - cx) ** 2 + (y_idx - cy) ** 2)
+
+    # 2. 径向分箱 → 方位角平均
+    R_binned = np.round(R / radial_step).astype(int)
+    max_bin = int(np.ceil(max_radius / radial_step))
+
+    radial_R = np.arange(max_bin + 1, dtype=float) * radial_step
+    radial_intensity = np.zeros(max_bin + 1, dtype=float)
+    pixel_count = np.zeros(max_bin + 1, dtype=int)
+
+    for bin_idx in range(max_bin + 1):
+        mask = R_binned == bin_idx
+        count = int(np.sum(mask))
+        pixel_count[bin_idx] = count
+        if count >= min_pixels_per_bin:
+            radial_intensity[bin_idx] = float(np.mean(img[mask]))
+        else:
+            radial_intensity[bin_idx] = 0.0
+
+    # 有效数据掩码: 在最大半径内且像素数达标
+    valid_mask = (radial_R <= max_radius) & (pixel_count >= min_pixels_per_bin)
+
+    return {
+        "radial_R": radial_R,
+        "radial_intensity": radial_intensity,
+        "pixel_count": pixel_count,
+        "valid_mask": valid_mask,
+        "max_radius": max_radius,
+        "success": True,
+        "message": "计算成功",
+    }
+
+
 def normalize_data(data, min_val=0, max_val=1):
     """
     Normalize the data to the range [0, 1].

@@ -18,7 +18,6 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
@@ -29,15 +28,19 @@ if str(UI_ROOT) not in sys.path:
     sys.path.insert(0, str(UI_ROOT))
 
 # 导入光束分析模块
+from analysis.image.common import get_profiles  # noqa: E402
 from analysis.optical_analysis import (  # noqa: E402
     calculate_bpp,
+    calculate_strehl_ratio_with_energy_conservation,
     calculate_xy_diameters,
     d4sigma,
+    fit_flat_topped_lorentz,
+    fitting_gaussian,
+    gaussian,
     pib_ratio,
     read_image_to_numpy,
     shift_to_center_fft,
     subtract_dark_field,
-    calculate_strehl_ratio_with_energy_conservation,
 )
 from analysis.optical_analysis.image_utils import find_spot_border  # noqa: E402
 from analysis.optical_analysis.uniform_analysis import (  # noqa: E402
@@ -191,18 +194,6 @@ def plot_3d_visualization(img, title, zmin=None, zmax=None):
     else:
         Z_display = Z - zmin
 
-    # 计算xyz范围，用于统一尺度
-    x_range = X.max() - X.min()
-    y_range = Y.max() - Y.min()
-    z_range = zmax - zmin
-
-    # 归一化Z到与XY相同的尺度范围，使xyz视觉比例一致
-    if z_range > 0:
-        target_range = (x_range + y_range) / 2
-        Z_display = (Z - zmin) / z_range * target_range
-    else:
-        Z_display = Z - zmin
-
     # 创建Plotly 3D表面图
     plotly_fig = go.Figure(
         data=[
@@ -234,6 +225,142 @@ def plot_3d_visualization(img, title, zmin=None, zmax=None):
     )
 
     return plotly_fig
+
+
+def _render_ftl_radial_plot(ftl_result, unit_factor, unit_label):
+    """
+    绘制 FTL 径向拟合图（side-effect: st.pyplot）。
+
+    Args:
+        ftl_result: fit_flat_topped_lorentz() 返回的字典，需包含 success=True
+        unit_factor: 显示单位转换因子
+        unit_label: 显示单位标签
+    """
+    if not ftl_result.get("success"):
+        return
+    fig_ftl, ax_ftl = plt.subplots(figsize=(8, 5))
+    r_data = ftl_result["radial_R"]
+    i_data = ftl_result["radial_intensity"]
+    i_fit = ftl_result["fitted_intensity"]
+
+    fit_len = len(i_fit)
+    ax_ftl.scatter(r_data[:fit_len], i_data[:fit_len], s=8, color="blue", alpha=0.5, label="径向平均强度")
+    ax_ftl.plot(r_data[:fit_len], i_fit, "r-", linewidth=2, label="FTL 拟合")
+
+    R_FL_val = ftl_result["R_FL"]
+    q_val = ftl_result["q"]
+    ax_ftl.axvline(R_FL_val, color="green", linestyle="--", alpha=0.7,
+                   label=f"R_FL = {R_FL_val * unit_factor:.2f} {unit_label}")
+    ax_ftl.set_xlabel(f"径向距离 ({unit_label})")
+    ax_ftl.set_ylabel("强度")
+    ax_ftl.set_title(f"FTL 径向拟合 (q={q_val:.2f})")
+    ax_ftl.legend(fontsize=8)
+    ax_ftl.grid(True, alpha=0.3)
+    plt.tight_layout()
+    st.pyplot(fig_ftl)
+
+
+def _render_pupil_type_analysis(
+    pupil_denoise, pupil_features, pupil_border,
+    pupil_type, pupil_img, pupil_pixel, border_valid,
+):
+    """
+    根据光瞳类型渲染分析结果。
+
+    高斯光 → 光瞳截面高斯拟合（展示截面和拟合高斯曲线、束腰位置与值）
+    平顶光 → 均匀度分析（RMS Uniformity, P-V, 圆内均值）
+
+    Returns:
+        tuple: (uniformity_pupil, pupil_cross_section)
+        两个值均为 dict 或 None。
+    """
+    uniformity_pupil = None
+    pupil_cross_section = None
+    if not border_valid:
+        return uniformity_pupil, pupil_cross_section
+
+    if pupil_type == "高斯光 (Gaussian)":
+        # === 光瞳截面高斯拟合 ===
+        st.subheader("🔦 光瞳截面高斯拟合")
+        st.latex(r"f(x) = A \cdot \exp\left(-\frac{1}{2}\left(\frac{x-\mu}{\sigma}\right)^2\right) + b")
+        cx_p, cy_p = pupil_features["center_x"], pupil_features["center_y"]
+        pupil_profiles = get_profiles(pupil_denoise, (cx_p, cy_p), line_width=3)
+        h_prof = pupil_profiles["horizontal"]
+        v_prof = pupil_profiles["vertical"]
+
+        (h_mu, h_sigma, h_A, h_b), _ = fitting_gaussian(h_prof)
+        (v_mu, v_sigma, v_A, v_b), _ = fitting_gaussian(v_prof)
+
+        if not np.isnan(h_sigma) and not np.isnan(v_sigma):
+            col_c1, col_c2 = st.columns(2)
+            with col_c1:
+                st.metric("X 方向束腰位置", f"{h_mu:.2f} px",
+                          help="水平截面高斯拟合的中心位置（像素坐标）。")
+                st.metric("X 方向束腰 σ", f"{h_sigma:.2f} px",
+                          help=f"水平截面高斯拟合的 1σ 宽度。光束直径 (2σ) = {2 * h_sigma:.2f} px")
+            with col_c2:
+                st.metric("Y 方向束腰位置", f"{v_mu:.2f} px",
+                          help="垂直截面高斯拟合的中心位置（像素坐标）。")
+                st.metric("Y 方向束腰 σ", f"{v_sigma:.2f} px",
+                          help=f"垂直截面高斯拟合的 1σ 宽度。光束直径 (2σ) = {2 * v_sigma:.2f} px")
+
+            # 绘制截面 + 拟合曲线
+            fig_gs, (ax_h, ax_v) = plt.subplots(1, 2, figsize=(12, 4))
+            x_h = np.arange(len(h_prof))
+            x_h_fit = np.linspace(0, len(h_prof) - 1, 200)
+            ax_h.plot(x_h, h_prof, "b-", alpha=0.6, linewidth=1.5, label="原始数据")
+            ax_h.plot(x_h_fit, gaussian(x_h_fit, h_mu, h_sigma, h_A, h_b),
+                      "r-", linewidth=2, label="高斯拟合")
+            ax_h.axvline(h_mu, color="g", linestyle="--", alpha=0.7, label=f"μ={h_mu:.2f}")
+            ax_h.set_xlabel("像素")
+            ax_h.set_ylabel("强度")
+            ax_h.set_title("水平截面（X 方向）")
+            ax_h.legend(fontsize=8)
+            ax_h.grid(True, alpha=0.3)
+
+            x_v = np.arange(len(v_prof))
+            x_v_fit = np.linspace(0, len(v_prof) - 1, 200)
+            ax_v.plot(x_v, v_prof, "b-", alpha=0.6, linewidth=1.5, label="原始数据")
+            ax_v.plot(x_v_fit, gaussian(x_v_fit, v_mu, v_sigma, v_A, v_b),
+                      "r-", linewidth=2, label="高斯拟合")
+            ax_v.axvline(v_mu, color="g", linestyle="--", alpha=0.7, label=f"μ={v_mu:.2f}")
+            ax_v.set_xlabel("像素")
+            ax_v.set_ylabel("强度")
+            ax_v.set_title("垂直截面（Y 方向）")
+            ax_v.legend(fontsize=8)
+            ax_v.grid(True, alpha=0.3)
+
+            plt.tight_layout()
+            st.pyplot(fig_gs)
+
+            pupil_cross_section = {
+                "h_mu": h_mu, "h_sigma": h_sigma, "h_A": h_A, "h_b": h_b,
+                "v_mu": v_mu, "v_sigma": v_sigma, "v_A": v_A, "v_b": v_b,
+                "success": True,
+            }
+        else:
+            st.warning("⚠️ 高斯拟合失败，截面数据信噪比可能过低。")
+            pupil_cross_section = {"success": False}
+    else:
+        # === 均匀度分析（平顶光） ===
+        st.subheader("Uniformity Analysis - Pupil")
+        uniformity = calculate_uniformity_metrics(pupil_denoise, pupil_border)
+        col_u1, col_u2, col_u3 = st.columns(3)
+        with col_u1:
+            st.metric("RMS Uniformity", f"{uniformity['rms_uniformity']:.4f}",
+                      help="圆内光强的 RMS 非均匀度 = std / mean。值越接近 0，光斑越均匀。")
+        with col_u2:
+            st.metric("P-V", f"{uniformity['pv']:.4f}",
+                      help="峰谷非均匀度 = (max - min) / mean。值越小，说明光斑强度分布越平坦。")
+        with col_u3:
+            st.metric("圆内均值", f"{uniformity['mean_intensity']:.2f}",
+                      help="包围圆内部所有像素的强度算术平均。反映该区域的平均光强能级。")
+
+        uni_fig = plot_uniformity_analysis(pupil_img, pupil_border, uniformity, pupil_pixel * 1e6)
+        st.pyplot(uni_fig)
+        uniformity_pupil = uniformity
+
+    return uniformity_pupil, pupil_cross_section
 
 
 def main():
@@ -293,6 +420,26 @@ def main():
             step=1.0,
             help="当选择'手动输入'时，低于该强度的像素将被置零。",
         )
+
+    # 光瞳类型
+    st.sidebar.subheader("🔦 光瞳类型")
+    pupil_type = st.sidebar.radio(
+        "选择光瞳光斑类型",
+        ["平顶光 (Flat-Top)", "高斯光 (Gaussian)"],
+        index=0,
+        help="平顶光使用 FTL (Flat-Topped Lorentz) 模型拟合 R_FL 特征半径；"
+        "高斯光使用高斯函数拟合 X/Y 截面并计算半腰。",
+    )
+
+    # 显示单位
+    display_unit = st.sidebar.selectbox(
+        "显示单位",
+        ["μm", "mm", "nm"],
+        index=0,
+        help="所有长度/直径值的显示单位。内部计算始终以 μm 进行。",
+    )
+    _unit_factor = {"μm": 1.0, "mm": 0.001, "nm": 1000.0}[display_unit]
+    _unit_label = display_unit
 
     # 斯特列尔比参数
     st.sidebar.subheader("🔬 光学参数")
@@ -398,10 +545,10 @@ def main():
                 axis_features = d4sigma(axis_denoise, axis_pixel * 1e6)
                 col_a1, col_a2 = st.columns(2)
                 with col_a1:
-                    st.metric("光轴 D4σ X", f"{axis_features['D_x']:.2f} μm")
-                    st.metric("光轴 D4σ Y", f"{axis_features['D_y']:.2f} μm")
+                    st.metric("光轴 D4σ X", f"{axis_features['D_x'] * _unit_factor:.2f} {_unit_label}")
+                    st.metric("光轴 D4σ Y", f"{axis_features['D_y'] * _unit_factor:.2f} {_unit_label}")
                     st.metric(
-                        "光轴 平均直径", f"{axis_features['avg_diameter']:.2f} μm"
+                        "光轴 平均直径", f"{axis_features['avg_diameter'] * _unit_factor:.2f} {_unit_label}"
                     )
                 with col_a2:
                     st.metric(
@@ -420,17 +567,17 @@ def main():
                 with col_p1:
                     st.metric(
                         "光瞳 D4σ X",
-                        f"{pupil_features['D_x']:.2f} μm",
+                        f"{pupil_features['D_x'] * _unit_factor:.2f} {_unit_label}",
                         help="基于 X 方向二阶矩计算的 D4σ 直径（ISO 11146 约定），反映光斑在 X 方向的展宽。",
                     )
                     st.metric(
                         "光瞳 D4σ Y",
-                        f"{pupil_features['D_y']:.2f} μm",
+                        f"{pupil_features['D_y'] * _unit_factor:.2f} {_unit_label}",
                         help="基于 Y 方向二阶矩计算的 D4σ 直径，反映光斑在 Y 方向的展宽。",
                     )
                     st.metric(
                         "光瞳 平均直径",
-                        f"{pupil_features['avg_diameter']:.2f} μm",
+                        f"{pupil_features['avg_diameter'] * _unit_factor:.2f} {_unit_label}",
                         help="D4σ X 与 D4σ Y 的算术平均，用于近似圆对称光斑的口径估计。",
                     )
                 with col_p2:
@@ -450,6 +597,77 @@ def main():
                         f"{pupil_border['border_radius'] * 2:.2f} pixel",
                         help="包围圆直径 = 2 × 半径，用于估算光斑口径。",
                     )
+
+                # ===== 光瞳类型拟合 =====
+                st.subheader("🔦 光瞳类型拟合")
+                pupil_ftl_result = None
+                pupil_gaussian_result = None
+                pupil_cross_section = None
+                if pupil_type == "高斯光 (Gaussian)":
+                    pupil_gaussian_result = calculate_xy_diameters(
+                        pupil_denoise,
+                        pupil_features["center_x"],
+                        pupil_features["center_y"],
+                        pupil_pixel * 1e6,
+                    )
+                    col_gp1, col_gp2 = st.columns(2)
+                    with col_gp1:
+                        st.metric(
+                            "光瞳 高斯半腰 X",
+                            f"{pupil_gaussian_result['gaussian_dia_x(um)'] * _unit_factor:.2f} {_unit_label}",
+                            help="X 方向高斯拟合的半高宽直径 (2σ)。",
+                        )
+                    with col_gp2:
+                        st.metric(
+                            "光瞳 高斯半腰 Y",
+                            f"{pupil_gaussian_result['gaussian_dia_y(um)'] * _unit_factor:.2f} {_unit_label}",
+                            help="Y 方向高斯拟合的半高宽直径 (2σ)。",
+                        )
+                else:  # 平顶光 (Flat-Top)
+                    pupil_ftl_result = fit_flat_topped_lorentz(
+                        pupil_denoise,
+                        pupil_features["center_x"],
+                        pupil_features["center_y"],
+                        pixel_size=pupil_pixel * 1e6,
+                    )
+                    if pupil_ftl_result["success"]:
+                        st.latex(r"I(R) = \frac{I_0}{\left[1 + (R/R_{\text{FL}})^q\right]^{1 + 2/q}}")
+                        col_f1, col_f2, col_f3 = st.columns(3)
+                        with col_f1:
+                            st.metric(
+                                "R_FL (特征半径)",
+                                f"{pupil_ftl_result['R_FL'] * _unit_factor:.2f} {_unit_label}",
+                                help="FTL 模型拟合的特征半径，决定光斑整体尺度。",
+                            )
+                            st.metric(
+                                "R_FL 误差",
+                                f"±{pupil_ftl_result['R_FL_error'] * _unit_factor:.2f} {_unit_label}",
+                                help="R_FL 拟合标准误差。",
+                            )
+                        with col_f2:
+                            st.metric(
+                                "q (平顶阶数)",
+                                f"{pupil_ftl_result['q']:.2f}",
+                                help="平顶阶数 q：q→∞ 接近理想平顶，q=2 为洛伦兹线型。实际光束通常 q∈[2,20]。",
+                            )
+                            st.metric(
+                                "q 误差",
+                                f"±{pupil_ftl_result['q_error']:.2f}",
+                                help="q 拟合标准误差。",
+                            )
+                        with col_f3:
+                            st.metric(
+                                "拟合中心强度 I₀",
+                                f"{pupil_ftl_result['I0']:.2f}",
+                                help="FTL 模型拟合的中心峰值强度。",
+                            )
+                            st.metric(
+                                "R_FL / D4σ",
+                                f"{pupil_ftl_result['R_FL'] / (pupil_features['avg_diameter'] / 2):.4f}",
+                                help="特征半径 R_FL 与 D4σ 半径之比，反映光斑轮廓形态。",
+                            )
+                    else:
+                        st.warning(f"⚠️ FTL 拟合失败: {pupil_ftl_result['message']}")
 
                 pupil_fig = plot_beam_visualization(
                     pupil_img, "Pupil", pupil_pixel * 1e6, pupil_features
@@ -479,36 +697,14 @@ def main():
                     pupil_fig.axes[0].legend(loc="upper right", fontsize=8)
                 st.pyplot(pupil_fig)
 
-                if border_valid:
-                    st.header("Uniformity Analysis - Pupil")
-                    uniformity = calculate_uniformity_metrics(
-                        pupil_denoise, pupil_border
-                    )
-                    col_u1, col_u2, col_u3 = st.columns(3)
-                    with col_u1:
-                        st.metric(
-                            "RMS Uniformity",
-                            f"{uniformity['rms_uniformity']:.4f}",
-                            help="圆内光强的 RMS 非均匀度 = std / mean。值越接近 0，光斑越均匀。",
-                        )
-                    with col_u2:
-                        st.metric(
-                            "P-V",
-                            f"{uniformity['pv']:.4f}",
-                            help="峰谷非均匀度 = (max - min) / mean。值越小，说明光斑强度分布越平坦。",
-                        )
-                    with col_u3:
-                        st.metric(
-                            "圆内均值",
-                            f"{uniformity['mean_intensity']:.2f}",
-                            help="包围圆内部所有像素的强度算术平均。反映该区域的平均光强能级。",
-                        )
+                # 绘制 FTL 径向拟合图
+                if pupil_type == "平顶光 (Flat-Top)" and pupil_ftl_result is not None:
+                    _render_ftl_radial_plot(pupil_ftl_result, _unit_factor, _unit_label)
 
-                    uni_fig = plot_uniformity_analysis(
-                        pupil_img, pupil_border, uniformity, pupil_pixel * 1e6
-                    )
-                    st.pyplot(uni_fig)
-                    uniformity_pupil = uniformity
+                uniformity_pupil, pupil_cross_section = _render_pupil_type_analysis(
+                    pupil_denoise, pupil_features, pupil_border,
+                    pupil_type, pupil_img, pupil_pixel, border_valid,
+                )
 
                 if has_axis and has_pupil:
                     st.header("BPP (Beam Parameter Product)")
@@ -546,6 +742,7 @@ def main():
                     st.warning("⚠️ 图像可能过曝，PIB占比计算结果可能不准确")
 
                 st.header("Gaussian Fitting - Axis")
+                st.latex(r"f(x) = A \cdot \exp\left(-\frac{1}{2}\left(\frac{x-\mu}{\sigma}\right)^2\right) + b")
                 axis_gaussian = calculate_xy_diameters(
                     axis_denoise,
                     axis_features["center_x"],
@@ -556,11 +753,11 @@ def main():
                 with col_g1:
                     st.metric(
                         "光轴 高斯直径 X",
-                        f"{axis_gaussian['gaussian_dia_x(um)']:.2f} μm",
+                        f"{axis_gaussian['gaussian_dia_x(um)'] * _unit_factor:.2f} {_unit_label}",
                     )
                     st.metric(
                         "光轴 高斯直径 Y",
-                        f"{axis_gaussian['gaussian_dia_y(um)']:.2f} μm",
+                        f"{axis_gaussian['gaussian_dia_y(um)'] * _unit_factor:.2f} {_unit_label}",
                     )
 
             if has_axis and has_pupil:
@@ -614,43 +811,80 @@ def main():
 
             if has_axis:
                 results["参数"] += [
-                    "光轴 D4σ X (μm)",
-                    "光轴 D4σ Y (μm)",
-                    "光轴 平均直径 (μm)",
-                    "光轴 PIB占比",
-                    "光轴 高斯直径 X (μm)",
-                    "光轴 高斯直径 Y (μm)",
+                    f"光轴 D4σ X ({_unit_label})",
+                    f"光轴 D4σ Y ({_unit_label})",
+                    f"光轴 平均直径 ({_unit_label})",
+                    "PIB",
+                    f"光轴 高斯直径 X ({_unit_label})",
+                    f"光轴 高斯直径 Y ({_unit_label})",
                 ]
                 results["值"] += [
-                    f"{axis_features['D_x']:.2f}",
-                    f"{axis_features['D_y']:.2f}",
-                    f"{axis_features['avg_diameter']:.2f}",
+                    f"{axis_features['D_x'] * _unit_factor:.2f}",
+                    f"{axis_features['D_y'] * _unit_factor:.2f}",
+                    f"{axis_features['avg_diameter'] * _unit_factor:.2f}",
                     f"{axis_pib:.4f}",
-                    f"{axis_gaussian['gaussian_dia_x(um)']:.2f}",
-                    f"{axis_gaussian['gaussian_dia_y(um)']:.2f}",
+                    f"{axis_gaussian['gaussian_dia_x(um)'] * _unit_factor:.2f}",
+                    f"{axis_gaussian['gaussian_dia_y(um)'] * _unit_factor:.2f}",
                 ]
 
             if has_pupil:
                 results["参数"] += [
-                    "光瞳 D4σ X (μm)",
-                    "光瞳 D4σ Y (μm)",
-                    "光瞳 平均直径 (μm)",
+                    f"光瞳 D4σ X ({_unit_label})",
+                    f"光瞳 D4σ Y ({_unit_label})",
+                    f"光瞳 平均直径 ({_unit_label})",
                     "包围圆半径 (pixel)",
                     "包围圆直径 (pixel)",
-                    "RMS Uniformity",
-                    "P-V",
-                    "圆内均值",
                 ]
                 results["值"] += [
-                    f"{pupil_features['D_x']:.2f}",
-                    f"{pupil_features['D_y']:.2f}",
-                    f"{pupil_features['avg_diameter']:.2f}",
+                    f"{pupil_features['D_x'] * _unit_factor:.2f}",
+                    f"{pupil_features['D_y'] * _unit_factor:.2f}",
+                    f"{pupil_features['avg_diameter'] * _unit_factor:.2f}",
                     f"{pupil_border['border_radius']:.2f}",
                     f"{pupil_border['border_radius'] * 2:.2f}",
-                    f"{uniformity_pupil['rms_uniformity']:.4f}",
-                    f"{uniformity_pupil['pv']:.4f}",
-                    f"{uniformity_pupil['mean_intensity']:.2f}",
                 ]
+                if uniformity_pupil is not None:
+                    results["参数"] += ["RMS Uniformity", "P-V", "圆内均值"]
+                    results["值"] += [
+                        f"{uniformity_pupil['rms_uniformity']:.4f}",
+                        f"{uniformity_pupil['pv']:.4f}",
+                        f"{uniformity_pupil['mean_intensity']:.2f}",
+                    ]
+                elif pupil_cross_section is not None and pupil_cross_section["success"]:
+                    results["参数"] += [
+                        "X 束腰位置 (pixel)", "X 束腰 σ (pixel)",
+                        "Y 束腰位置 (pixel)", "Y 束腰 σ (pixel)",
+                    ]
+                    results["值"] += [
+                        f"{pupil_cross_section['h_mu']:.2f}",
+                        f"{pupil_cross_section['h_sigma']:.2f}",
+                        f"{pupil_cross_section['v_mu']:.2f}",
+                        f"{pupil_cross_section['v_sigma']:.2f}",
+                    ]
+                # 光瞳类型拟合结果
+                if pupil_type == "高斯光 (Gaussian)" and pupil_gaussian_result is not None:
+                    results["参数"] += [
+                        f"光瞳 高斯半腰 X ({_unit_label})",
+                        f"光瞳 高斯半腰 Y ({_unit_label})",
+                    ]
+                    results["值"] += [
+                        f"{pupil_gaussian_result['gaussian_dia_x(um)'] * _unit_factor:.2f}",
+                        f"{pupil_gaussian_result['gaussian_dia_y(um)'] * _unit_factor:.2f}",
+                    ]
+                elif pupil_type == "平顶光 (Flat-Top)" and pupil_ftl_result is not None and pupil_ftl_result["success"]:
+                    results["参数"] += [
+                        f"R_FL ({_unit_label})",
+                        f"R_FL 误差 ({_unit_label})",
+                        "q (平顶阶数)",
+                        "q 误差",
+                        "拟合中心强度 I₀",
+                    ]
+                    results["值"] += [
+                        f"{pupil_ftl_result['R_FL'] * _unit_factor:.2f}",
+                        f"{pupil_ftl_result['R_FL_error'] * _unit_factor:.2f}",
+                        f"{pupil_ftl_result['q']:.2f}",
+                        f"{pupil_ftl_result['q_error']:.2f}",
+                        f"{pupil_ftl_result['I0']:.2f}",
+                    ]
 
             if has_axis and has_pupil:
                 results["参数"] += [

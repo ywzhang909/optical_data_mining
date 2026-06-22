@@ -16,11 +16,11 @@ ui/                                # Streamlit + FastAPI 应用
   ├── streamlit_dashboard.py       # Pipeline 监控仪表盘
   ├── server/                      # FastAPI 后端
   └── analysis/                    # 光束分析算法
-      ├── optical_analysis/        # D4σ, PIB, Strehl, M², BPP, 衍射
-      └── image/                   # 图像 I/O, 特征提取
+      ├── optical_analysis/        # D4σ, PIB, Strehl, M², BPP, 衍射, FTL
+      └── image/                   # 图像 I/O, 特征提取, 径向剖面
 
 notebooks/                         # Jupyter 交互式分析脚本
-tests/                             # pytest 测试（83 tests）
+tests/                             # pytest 测试（92 tests）
 ```
 
 ## 快速开始
@@ -41,7 +41,7 @@ uv run streamlit run ui/streamlit_dashboard.py --server.port 8501
 uv run pytest tests/ -v
 
 # 静态检查
-uv run ruff check src/ ui/analysis/
+uv run ruff check src/ ui/analysis/ ui/
 uv run ruff format src/ ui/analysis/ --check
 ```
 
@@ -75,6 +75,9 @@ uv run ruff format src/ ui/analysis/ --check
 | `calculate_bpp()` | 光束参数积 |
 | `calculate_m2()` | 光束质量因子 M² |
 | `calculate_centroid()` | 质心计算 |
+| `fit_flat_topped_lorentz()` | FTL (Flat-Topped Lorentz) 平顶光模型拟合，计算特征半径 R_FL |
+| `fitting_gaussian()` | 一维高斯拟合：f(x) = A·exp(-½((x-μ)/σ)²) + b |
+| `calculate_xy_diameters()` | 基于高斯拟合的 X/Y 方向直径 |
 | `shift_to_center_fft()` | FFT 亚像素移位居中 |
 | `calculate_strehl_ratio_with_energy_conservation()` | 能量守恒斯特列尔比 |
 | `fnr3()` | 菲涅尔衍射积分（向量化） |
@@ -87,9 +90,39 @@ uv run ruff format src/ ui/analysis/ --check
 |---|---|
 | `read_tiff_to_numpy()` | TIFF/PNG 读取 → numpy 数组 |
 | `get_profiles()` | 光斑横纵截面强度分布 |
+| `compute_radial_profile()` | 径向强度分布（方位角平均），FTL 拟合共用工具 |
+| `cartesian_to_polar()` | 直角坐标 → 极坐标转换 |
+| `polar_to_cartesian()` | 极坐标 → 直角坐标转换 |
 | `fourier_shift_to_center()` | 傅里叶亚像素平移 |
 | `extract_radial_data()` | 径向数据提取 |
 | `convert_to_cv()` | numpy → OpenCV uint8 格式 |
+
+### AO 光束质量分析仪表盘（`ui/ao_analysis_app.py`）
+
+侧边栏功能：
+- **光瞳类型选择**：平顶光 (Flat-Top) / 高斯光 (Gaussian)
+  - 平顶光 → FTL 模型拟合 R_FL + Uniformity 分析
+  - 高斯光 → 截面高斯拟合 + 束腰位置/直径
+- **显示单位**：μm / mm / nm，动态切换所有长度/直径值的显示格式
+- 积分球/光轴相机像素尺寸、去暗场方法、光学参数（波长、焦距、入瞳直径）
+
+分析结果：
+- D4σ 直径（X/Y/平均），PIB 占比
+- 高斯拟合直径（基于 X/Y 截面）
+- 包围圆检测与可视化
+- FTL 径向拟合图（平顶光）或截面高斯拟合图（高斯光）
+- BPP、发散角、M²、斯特列尔比
+- 3D Plotly 表面可视化（光轴 vs 理想 vs 光瞳）
+- 结果汇总表 + CSV 导出
+
+## 代码审计与重构
+
+项目已通过以下代码质量改进：
+
+- **重复代码移除**：`plot_3d_visualization()` 中范围归一化代码块被复制两次，已删除冗余副本
+- **深层嵌套优化**：将 FTL 径向绘图（`_render_ftl_radial_plot`）和光瞳类型分析（`_render_pupil_type_analysis`）提取为独立函数，`main()` 嵌套深度从 6 级降至 4 级
+- **工具函数提取**：`compute_radial_profile()` 从 `fit_flat_topped_lorentz()` 提取到 `analysis.image.common`，供模块内复用
+- **变量初始化完善**：`uniformity_pupil` 总是通过函数返回值初始化，消除潜在 `NameError`
 
 ## 开发
 
@@ -98,11 +131,8 @@ uv run ruff format src/ ui/analysis/ --check
 uv sync --dev
 
 # 代码检查
-uv run ruff check src/ ui/analysis/
+uv run ruff check src/ ui/analysis/ ui/
 uv run ruff format src/ ui/analysis/ --check
-
-# 类型检查（确保有 pyright/pylance）
-# ruff check 已经覆盖常见类型问题
 
 # 测试
 uv run pytest tests/ -v --tb=short

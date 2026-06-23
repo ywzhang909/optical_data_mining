@@ -40,6 +40,10 @@ output*
 .env
 .env.*
 
+# UV config
+.uv/
+UV*配置*说明*
+
 # Legacy directories (not part of streamlit-cloud deployment)
 src/
 docs/

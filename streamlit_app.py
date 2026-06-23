@@ -75,7 +75,7 @@ def plot_beam_visualization(img, title, pixel_size_um, features):
     绘制光束可视化图：
     - 质心标记
     - D4σ圆
-    - XY轴切面光强曲线
+    - XY 轴切面光强曲线（同一子图）
 
     Args:
         img: 原始图像
@@ -93,7 +93,7 @@ def plot_beam_visualization(img, title, pixel_size_um, features):
     # 使用平均sigma2作为半径
     r_pix = features["avg_diameter"] / pixel_size_um / 2  # 半径（像素）
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
     # 1. Centroid + D4σ circle
     ax1 = axes[0]
@@ -118,43 +118,30 @@ def plot_beam_visualization(img, title, pixel_size_um, features):
     ax1.set_xlabel("X (pixel)")
     ax1.set_ylabel("Y (pixel)")
 
-    # 2. X direction profile
+    # 2. X + Y direction profiles (combined)
     ax2 = axes[1]
     x_data = img[int(cy), :]
     x_pixels = np.arange(len(x_data))
     x_um = (x_pixels - cx) * pixel_size_um  # Convert to μm
 
-    ax2.plot(x_um, x_data, "b-", linewidth=1.5, label="X profile")
-    ax2.axvline(x=0, color="gray", linestyle=":", alpha=0.7, label="Centroid")
-    max_val = np.max(x_data)
-    if max_val > 0:
-        ax2.axhline(
-            y=max_val / np.e, color="r", linestyle="--", alpha=0.5, label="1/e peak"
-        )
-    ax2.set_title(f"{title} - X Profile", fontsize=12)
-    ax2.set_xlabel("X (μm)")
-    ax2.set_ylabel("Intensity")
-    ax2.legend(fontsize=8)
-    ax2.grid(True, alpha=0.3)
-
-    # 3. Y direction profile
-    ax3 = axes[2]
     y_data = img[:, int(cx)]
     y_pixels = np.arange(len(y_data))
     y_um = (y_pixels - cy) * pixel_size_um  # Convert to μm
 
-    ax3.plot(y_um, y_data, "g-", linewidth=1.5, label="Y profile")
-    ax3.axvline(x=0, color="gray", linestyle=":", alpha=0.7, label="Centroid")
-    max_val = np.max(y_data)
+    ax2.plot(x_um, x_data, "b-", linewidth=1.5, label="X profile")
+    ax2.plot(y_um, y_data, "g-", linewidth=1.5, label="Y profile")
+    ax2.axvline(x=0, color="gray", linestyle=":", alpha=0.7, label="Centroid")
+
+    max_val = max(np.max(x_data), np.max(y_data))
     if max_val > 0:
-        ax3.axhline(
+        ax2.axhline(
             y=max_val / np.e, color="r", linestyle="--", alpha=0.5, label="1/e peak"
         )
-    ax3.set_title(f"{title} - Y Profile", fontsize=12)
-    ax3.set_xlabel("Y (μm)")
-    ax3.set_ylabel("Intensity")
-    ax3.legend(fontsize=8)
-    ax3.grid(True, alpha=0.3)
+    ax2.set_title(f"{title} - Cross-section Profiles", fontsize=12)
+    ax2.set_xlabel("Offset (μm)")
+    ax2.set_ylabel("Intensity")
+    ax2.legend(fontsize=8)
+    ax2.grid(True, alpha=0.3)
 
     plt.tight_layout()
     return fig
@@ -269,14 +256,14 @@ def _render_pupil_type_analysis(
             col_c1, col_c2 = st.columns(2)
             with col_c1:
                 st.metric("X 方向束腰位置", f"{h_mu:.2f} px",
-                          help="水平截面高斯拟合的中心位置（像素坐标）。")
+                          help="水平截面高斯拟合中心 (μ)，理想情况下应接近光斑质心。")
                 st.metric("X 方向束腰 σ", f"{h_sigma:.2f} px",
-                          help=f"水平截面高斯拟合的 1σ 宽度。光束直径 (2σ) = {2 * h_sigma:.2f} px")
+                          help=f"水平截面高斯拟合 1σ 宽度 (像素)。光束高斯直径 (2σ) = {2 * h_sigma:.2f} px")
             with col_c2:
                 st.metric("Y 方向束腰位置", f"{v_mu:.2f} px",
-                          help="垂直截面高斯拟合的中心位置（像素坐标）。")
+                          help="垂直截面高斯拟合中心 (μ)，理想情况下应接近光斑质心。")
                 st.metric("Y 方向束腰 σ", f"{v_sigma:.2f} px",
-                          help=f"垂直截面高斯拟合的 1σ 宽度。光束直径 (2σ) = {2 * v_sigma:.2f} px")
+                          help=f"垂直截面高斯拟合 1σ 宽度 (像素)。光束高斯直径 (2σ) = {2 * v_sigma:.2f} px")
 
             # 绘制截面 + 拟合曲线
             fig_gs, (ax_h, ax_v) = plt.subplots(1, 2, figsize=(12, 4))
@@ -342,7 +329,7 @@ def main():
 
     st.title("🔬 AO光束质量分析")
     st.markdown(
-        "上传一张**光轴(axis)**图片和一张**光瞳(pupil)**图片，自动计算相关特征量并可视化结果"
+        "上传一张**光轴**图片和一张**光瞳**图片，自动计算相关特征量并可视化结果  [帮助](https://github.com/ywzhang909/optical_data_mining/blob/streamlit-cloud/README.md)"
     )
 
     # 侧边栏 - 参数设置
@@ -352,19 +339,19 @@ def main():
     st.sidebar.subheader("📷 相机参数")
     axis_pixel = (
         st.sidebar.number_input(
-            "光轴相机像素尺寸 (μm)",
+            "光轴像素尺寸 (μm)",
             value=2.9,
             format="%.2f",
-            help="光轴（聚焦面）相机的单像素物理尺寸。用于把像素坐标转换为实际微米长度。",
+            help="聚焦面相机的单像素物理尺寸，用于像素→微米换算。",
         )
         * 1e-6
     )
     pupil_pixel = (
         st.sidebar.number_input(
-            "光瞳相机像素尺寸 (μm)",
+            "光瞳像素尺寸 (μm)",
             value=2.9 * 20,
             format="%.2f",
-            help="光瞳（远场）相机的单像素物理尺寸。影响 D4σ、BPP、M² 等的口径换算。",
+            help="出射光瞳面相机的单像素物理尺寸，影响 D4σ / BPP / M² 换算。",
         )
         * 1e-6
     )
@@ -377,12 +364,12 @@ def main():
         index=0,
         format_func=lambda x: {
             "none": "无",
-            "median": "中值",
+            "median": "中值滤波",
             "min": "最小值",
-            "1_e": "1/e",
-            "manual": "手动输入",
+            "1_e": "1/e 阈值",
+            "manual": "手动阈值",
         }[x],
-        help="从图像中扣除暗场/背景，避免把噪声当成信号。",
+        help="从图像中扣除背景噪声。\"中值滤波\"适用于均匀背景，\"1/e 阈值\"自动估计噪声水平，\"手动阈值\"直接置零低于设定值的像素。",
     )
 
     # 手动输入阈值
@@ -392,7 +379,7 @@ def main():
             "手动阈值",
             value=100.0,
             step=1.0,
-            help="当选择'手动输入'时，低于该强度的像素将被置零。",
+            help="当去暗场方式为\"手动阈值\"时，低于此强度的像素直接置零。",
         )
 
     # 光瞳类型
@@ -401,8 +388,8 @@ def main():
         "选择光瞳光斑类型",
         ["平顶光 (Flat-Top)", "高斯光 (Gaussian)"],
         index=0,
-        help="平顶光使用 FTL (Flat-Topped Lorentz) 模型拟合 R_FL 特征半径；"
-        "高斯光使用高斯函数拟合 X/Y 截面并计算半腰。",
+        help="选择光瞳光斑的强度分布模型。平顶光使用 FTL 模型拟合特征半径 R_FL 和平顶阶数 q；"
+        "高斯光使用高斯函数拟合 X/Y 截面并计算束腰。",
     )
 
     # 均匀度计算边界
@@ -411,7 +398,7 @@ def main():
         "边界类型",
         ["包围圆 (Enclosing circle)", "包围椭圆 (Ellipse)", "FTL 特征半径", "二阶矩半径 (2nd moment)"],
         index=0,
-        help="计算平顶光均匀度时，光斑区域的边界选取方式。仅在平顶光模式下生效。",
+        help="平顶光均匀度分析的光斑边界选取方式。包围圆/椭圆基于轮廓检测，FTL 基于拟合特征半径，二阶矩半径基于 D4σ。仅平顶光模式生效。",
     )
 
     # FTL 角度采样
@@ -422,7 +409,7 @@ def main():
         max_value=72,
         value=36,
         step=4,
-        help="沿光瞳圆心逐角度采样并拟合 FTL。0 表示仅用角向平均（向后兼容）。增大可探测非对称性。",
+        help="沿光瞳圆心向各方向逐角度采样并独立拟合 FTL。0 表示仅用角向平均。增大采样数可更好地探测光斑各向异性。",
     )
 
     # 显示单位
@@ -430,7 +417,7 @@ def main():
         "显示单位",
         ["μm", "mm", "nm"],
         index=0,
-        help="所有长度/直径值的显示单位。内部计算始终以 μm 进行。",
+        help="长度/直径值的显示单位。内部始终以 μm 计算，显示时按需换算。",
     )
     _unit_factor = {"μm": 1.0, "mm": 0.001, "nm": 1000.0}[display_unit]
     _unit_label = display_unit
@@ -441,19 +428,19 @@ def main():
         "波长 λ (nm)",
         value=1064,
         step=1,
-        help="激光波长。用于 PIB、斯特列尔比、BPP 衍射极限的计算。",
+        help="激光波长，用于 PIB 衍射孔径、斯特列尔比、BPP 衍射极限等计算。",
     )
     focal_length = st.sidebar.number_input(
         "焦距 f (mm)",
         value=3000,
         step=100,
-        help="聚焦透镜焦距。用于 PIB 孔径计算和 BPP 换算（出射角 = D_pupil / f）。",
+        help="聚焦透镜焦距。用于 PIB 孔径角计算和 BPP 换算（θ = D_pupil / f）。",
     )
     aperture_diameter = st.sidebar.number_input(
         "入瞳直径 D (mm)",
         value=100,
         step=10,
-        help="系统入瞳口径。用于 PIB 占比的理论孔径归一化。",
+        help="系统入瞳口径，用于 PIB 的归一化衍射孔径。",
     )
 
     # Zernike 分解参数
@@ -464,7 +451,7 @@ def main():
         max_value=10,
         value=6,
         step=1,
-        help="Zernike 多项式最大径向阶数 n。阶数越高，可拟合的像差模式越多，但需要更大的采样孔径。",
+        help="Zernike 多项式最大径向阶数 n。阶数越高可拟合的像差模式越多（如彗差、球差等高阶项），但需要更大的有效采样孔径。",
     )
 
     st.header("📁 文件上传")
@@ -474,37 +461,38 @@ def main():
     with col1:
         st.subheader("光轴图片 (Axis)")
         axis_file = st.file_uploader(
-            "上传光轴相机图片",
+            "点击或拖拽上传光轴相机图片",
             type=["tiff", "tif", "png", "jpg", "jpeg"],
-            help="支持TIFF, PNG, JPG格式",
+            help="支持 TIFF / PNG / JPG 格式。光轴为聚焦面图像（像方焦平面），用于计算 D4σ、PIB、高斯拟合直径。",
         )
 
     with col2:
         st.subheader("光瞳图片 (Pupil)")
         pupil_file = st.file_uploader(
-            "上传光瞳相机图片",
+            "点击或拖拽上传光瞳相机图片",
             type=["tiff", "tif", "png", "jpg", "jpeg"],
-            help="支持TIFF, PNG, JPG格式",
+            help="支持 TIFF / PNG / JPG 格式。光瞳为出射光瞳面图像（远场），用于计算 D4σ、包围圆、FTL/高斯拟合、Zernike 波前分析。",
         )
 
     has_axis = axis_file is not None
     has_pupil = pupil_file is not None
 
     if not has_axis and not has_pupil:
-        st.info("Please upload axis and/or pupil images to start analysis")
+        st.info("请上传光轴(axis)和/或光瞳(pupil)图片以开始分析")
 
         st.header("📖 使用说明")
         st.markdown("""
-        ### 分析流程
+        | 步骤 | 操作 |
+        |------|------|
+        | ① | 上传光轴(Axis)和/或光瞳(Pupil)图片（可单独上传） |
+        | ② | 在侧边栏调参（相机参数、去暗场、光瞳类型等） |
+        | ③ | 点击 **🚀 开始计算**，系统自动计算指标并生成图表 |
+        | ④ | 导出结果汇总 CSV |
 
-        1. **图片上传**: 上传光轴(axis)和/或光瞳(pupil)图片（支持单独上传）
-        2. **参数设置**: 在侧边栏设置相机参数和处理参数
-        3. **开始计算**: 点击"开始计算"按钮，系统将根据上传的图片自动计算相关指标：
-           - **光瞳图片**: D4σ直径、包围圆、BPP、M²
-           - **光轴图片**: D4σ直径、PIB占比、高斯拟合、斯特列尔比（需同时上传光瞳）
-           - **两张图片**: 完整分析流程
-        4. **可视化**: 生成综合分析图表
-        5. **导出**: 下载分析结果CSV
+        **支持的计算范围：**
+        - **仅光瞳** → D4σ、包围圆/椭圆拟合、FTL/高斯拟合、均匀度分析
+        - **仅光轴** → D4σ、PIB占比、高斯拟合直径
+        - **两者均有** → 完整分析：BPP、M²、斯特列尔比、Zernike 波前分解
         """)
     else:
         upload_parts = []
@@ -516,13 +504,13 @@ def main():
 
         notes = []
         if has_axis and not has_pupil:
-            notes.append("- 当前仅可计算：光轴 D4σ、PIB占比、高斯拟合")
-            notes.append("- 请上传**光瞳图片**以计算：斯特列尔比、BPP、M²")
+            notes.append("- 当前仅可计算：**光轴** D4σ、PIB占比、高斯拟合")
+            notes.append("- 如需斯特列尔比、BPP、M²，请同时上传**光瞳图片**")
         elif has_pupil and not has_axis:
-            notes.append("- 当前仅可计算：光瞳 D4σ、包围圆")
-            notes.append("- 请上传**光轴图片**以计算：斯特列尔比、BPP、M²")
+            notes.append("- 当前仅可计算：**光瞳** D4σ、包围圆/椭圆拟合、FTL/高斯拟合、均匀度分析")
+            notes.append("- 如需 BPP、M²、斯特列尔比，请同时上传**光轴图片**")
         if notes:
-            st.info("📌 计算范围提示\n" + "\n".join(notes))
+            st.info("📌 " + "；".join(notes))
 
         if st.button("🚀 开始计算", type="primary", width="stretch"):
             zernike_result = None
@@ -612,9 +600,11 @@ def main():
                 if not np.isnan(pupil_ellipse.get("ellipticity", np.nan)):
                     col_e1, col_e2, col_e3, col_e4 = st.columns(4)
                     with col_e1:
-                        st.metric("短轴", f"{pupil_ellipse['short_axis']:.2f} px")
+                        st.metric("短轴", f"{pupil_ellipse['short_axis']:.2f} px",
+                                  help="椭圆拟合的短轴长度（像素），反映光斑的最短径向尺度。")
                     with col_e2:
-                        st.metric("长轴", f"{pupil_ellipse['long_axis']:.2f} px")
+                        st.metric("长轴", f"{pupil_ellipse['long_axis']:.2f} px",
+                                  help="椭圆拟合的长轴长度（像素），反映光斑的最长径向尺度。")
                     with col_e3:
                         st.metric("椭圆度", f"{pupil_ellipse['ellipticity']:.4f}",
                                   help="长轴/短轴比值，越接近 1 越圆。")
@@ -671,6 +661,7 @@ def main():
                             st.metric(
                                 "R_FL 误差",
                                 f"±{pupil_ftl_result['R_FL_error'] * _unit_factor:.2f} {_unit_label}",
+                                help="全局 FTL 拟合 R_FL 的标准误差，反映拟合不确定性。",
                             )
                         with col_f2:
                             st.metric(
@@ -681,11 +672,13 @@ def main():
                             st.metric(
                                 "q 误差",
                                 f"±{pupil_ftl_result['q_error']:.2f}",
+                                help="全局 FTL 拟合平顶阶数 q 的标准误差。值越大说明径向轮廓对 q 越不敏感。",
                             )
                         with col_f3:
                             st.metric(
                                 "拟合中心强度 I₀",
                                 f"{pupil_ftl_result['I0']:.2f}",
+                                help="FTL 模型在 R=0 处的拟合峰值强度，反映光斑中心能量密度。",
                             )
                             st.metric(
                                 "R_FL / D4σ 半径比",
@@ -725,10 +718,10 @@ def main():
                 )
                 if uniformity_pupil is not None:
                     st.caption(
-                        "均匀度边界: " + uniformity_boundary_type
-                        + " | 半径 = " + f"{uniformity_pupil['radius']:.2f} px"
-                        + " | RMS = " + f"{uniformity_pupil['rms_uniformity']:.4f}"
-                        + " | P-V = " + f"{uniformity_pupil['pv']:.4f}"
+                        f"边界: {uniformity_boundary_type}"
+                        f" | 半径: {uniformity_pupil['radius']:.2f} px"
+                        f" | RMS: {uniformity_pupil['rms_uniformity']:.4f}"
+                        f" | P-V: {uniformity_pupil['pv']:.4f}"
                     )
 
                 pupil_border_valid = not (
@@ -786,32 +779,39 @@ def main():
                             valid_rfl = ang_rfl_arr[~np.isnan(ang_rfl_arr)]
                             with col_ftl1:
                                 st.metric("平均 R_FL",
-                                          f"{np.nanmean(valid_rfl) * _unit_factor:.2f} {_unit_label}")
+                                          f"{np.nanmean(valid_rfl) * _unit_factor:.2f} {_unit_label}",
+                                          help="各角度 FTL 特征半径 R_FL(θ) 的角向均值。与全局径向平均拟合值接近，反映光斑总体尺度。")
                             with col_ftl2:
                                 st.metric("R_FL 标准差",
-                                          f"{np.nanstd(valid_rfl) * _unit_factor:.2f} {_unit_label}")
+                                          f"{np.nanstd(valid_rfl) * _unit_factor:.2f} {_unit_label}",
+                                          help="R_FL(θ) 角向标准差。值越大说明光斑半径的方向依赖性越强（各向异性越显著）。")
                             with col_ftl3:
                                 st.metric("R_FL 最大",
-                                          f"{np.nanmax(valid_rfl) * _unit_factor:.2f} {_unit_label}")
+                                          f"{np.nanmax(valid_rfl) * _unit_factor:.2f} {_unit_label}",
+                                          help="R_FL(θ) 最大值，对应光斑的最长径向尺度方向。")
                             with col_ftl4:
                                 eftl = pupil_ftl_result.get("ellipticity_from_ftl", np.nan)
                                 st.metric("FTL 椭圆度", f"{eftl:.4f}" if not np.isnan(eftl) else "N/A",
-                                          help="基于 R_FL(θ) 最大/最小值比，=1 表示圆对称")
+                                          help="基于 R_FL(θ) 最大/最小值比 (= 长轴/短轴)，=1 表示圆对称，>1 表示椭圆。")
 
                             valid_q = ang_q_arr[~np.isnan(ang_q_arr)]
                             col_q1, col_q2, col_q3, col_q4 = st.columns(4)
                             with col_q1:
                                 st.metric("平均 q",
-                                          f"{np.nanmean(valid_q):.2f}" if len(valid_q) > 0 else "N/A")
+                                          f"{np.nanmean(valid_q):.2f}" if len(valid_q) > 0 else "N/A",
+                                          help="各角度平顶阶数 q(θ) 的角向均值。q → ∞ 为理想平顶，q ≈ 2 为洛伦兹线型。")
                             with col_q2:
                                 st.metric("q 标准差",
-                                          f"{np.nanstd(valid_q):.2f}" if len(valid_q) > 0 else "N/A")
+                                          f"{np.nanstd(valid_q):.2f}" if len(valid_q) > 0 else "N/A",
+                                          help="q(θ) 角向标准差。反映光斑边缘陡峭程度的方向一致性，越大说明各方向轮廓形态差异越大。")
                             with col_q3:
                                 st.metric("q 最小",
-                                          f"{np.nanmin(valid_q):.2f}" if len(valid_q) > 0 else "N/A")
+                                          f"{np.nanmin(valid_q):.2f}" if len(valid_q) > 0 else "N/A",
+                                          help="q(θ) 最小值，对应光斑边缘最平缓（最接近洛伦兹型）的方向。")
                             with col_q4:
                                 st.metric("q 最大",
-                                          f"{np.nanmax(valid_q):.2f}" if len(valid_q) > 0 else "N/A")
+                                          f"{np.nanmax(valid_q):.2f}" if len(valid_q) > 0 else "N/A",
+                                          help="q(θ) 最大值，对应光斑边缘最陡峭（最接近理想平顶）的方向。")
 
                             fig_polar, ax_polar = plt.subplots(figsize=(6, 6), subplot_kw={"projection": "polar"})
                             cmap_val = (ang_theta_arr % (2 * np.pi)) / (2 * np.pi)
@@ -821,11 +821,8 @@ def main():
                             )
                             ax_polar.set_theta_zero_location("E")
                             ax_polar.set_theta_direction(-1)
-                            ax_polar.set_title(
-                                f"R_FL(θ) 极坐标图 (n={ftl_n_angles})",
-                                fontsize=11
-                            )
                             plt.tight_layout()
+                            st.markdown(f"**R_FL(θ) 极坐标图** (n={ftl_n_angles}) :gray[各角度 FTL 特征半径的极坐标分布，半径轴表示 R_FL 大小，颜色映射标识不同角度方向，用于判断光斑各向异性。]")
                             st.pyplot(fig_polar)
 
                             fig_ang, ax_ang = plt.subplots(figsize=(8, 3.5))
@@ -833,28 +830,28 @@ def main():
                                         color="steelblue", markersize=4, linewidth=1.2)
                             ax_ang.set_xlabel("角度 (°)")
                             ax_ang.set_ylabel(f"R_FL ({_unit_label})")
-                            ax_ang.set_title("FTL 特征半径角向分布")
                             ax_ang.grid(True, alpha=0.3)
                             mean_rfl = np.nanmean(valid_rfl) * _unit_factor
                             ax_ang.axhline(mean_rfl, color="gray", linestyle="--", alpha=0.6,
                                           label=f"均值={mean_rfl:.2f}")
                             ax_ang.legend(fontsize=8)
                             plt.tight_layout()
+                            st.markdown("**FTL 特征半径角向分布** :gray[R_FL(θ) 随角度变化的折线图，灰色虚线为角向均值。曲线平坦表示近圆对称，波动越大各向异性越显著。]")
                             st.pyplot(fig_ang)
 
                             if len(valid_q) > 0:
-                                fig_q, ax_q = plt.subplots(figsize=(8, 3.5))
-                                ax_q.plot(ang_theta, ang_q_arr, "o-",
+                                fig_q, ax_q = plt.subplots(figsize=(6, 6), subplot_kw={"projection": "polar"})
+                                ax_q.plot(ang_theta_arr, ang_q_arr, "o-",
                                           color="darkorange", markersize=4, linewidth=1.2)
-                                ax_q.set_xlabel("角度 (°)")
-                                ax_q.set_ylabel("q (平顶阶数)")
-                                ax_q.set_title("FTL 平顶阶数 q 角向分布")
-                                ax_q.grid(True, alpha=0.3)
+                                ax_q.set_theta_zero_location("E")
+                                ax_q.set_theta_direction(-1)
                                 mean_q = np.nanmean(ang_q_arr)
-                                ax_q.axhline(mean_q, color="gray", linestyle="--", alpha=0.6,
-                                             label=f"均值={mean_q:.2f}")
-                                ax_q.legend(fontsize=8)
+                                ax_q.plot(ang_theta_arr, np.full_like(ang_q_arr, mean_q),
+                                          color="gray", linestyle="--", alpha=0.6, linewidth=1,
+                                          label=f"均值={mean_q:.2f}")
+                                ax_q.legend(fontsize=8, loc="upper right")
                                 plt.tight_layout()
+                                st.markdown("**FTL 平顶阶数 q(θ) 极坐标图** :gray[各角度平顶阶数的极坐标分布，半径表示 q 值，灰色虚线为角向均值。q → ∞ 理想平顶，q ≈ 2 洛伦兹线型。]")
                                 st.pyplot(fig_q)
 
                 if has_axis and has_pupil:
@@ -866,17 +863,21 @@ def main():
                     )
                     col_b1, col_b2 = st.columns(2)
                     with col_b1:
-                        st.metric("BPP", f"{bpp_result['BPP_mm_mrad']:.4f} mm·mrad")
+                        st.metric("BPP", f"{bpp_result['BPP_mm_mrad']:.4f} mm·mrad",
+                                  help="Beam Parameter Product = 束腰半径 × 远场发散角。衡量光束质量的核心指标，越接近衍射极限越好。")
                     with col_b2:
                         st.metric(
                             "发散角",
                             f"{bpp_result['divergence_mrad']:.4f} mrad",
+                            help="远场发散半角 (θ = D_focal / 2f)，基于焦斑直径与焦距计算。",
                         )
                     lambda_um = wavelength / 1000
                     bpp_diffraction = lambda_um / np.pi
-                    st.metric("衍射极限 BPP", f"{bpp_diffraction:.4f} mm·mrad")
+                    st.metric("衍射极限 BPP", f"{bpp_diffraction:.4f} mm·mrad",
+                              help="理想衍射受限光束的 BPP (= λ/π)。作为基准与实测 BPP 对比求 M²。")
                     M2 = bpp_result["BPP_mm_mrad"] / bpp_diffraction
-                    st.metric("M²", f"{M2:.4f}")
+                    st.metric("M²", f"{M2:.4f}",
+                              help="光束质量因子 = BPP / BPP_衍射极限。M² = 1 为理想衍射受限，越大光束质量越差。")
 
             st.header("光轴分析 — Axis Analysis")
 
@@ -887,19 +888,23 @@ def main():
                     st.metric(
                         "D4σ X 直径",
                         f"{axis_features['D_x'] * _unit_factor:.2f} {_unit_label}",
+                        help="基于 X 方向二阶矩的 D4σ 直径（ISO 11146），反映焦斑 X 向尺寸。",
                     )
                     st.metric(
                         "D4σ Y 直径",
                         f"{axis_features['D_y'] * _unit_factor:.2f} {_unit_label}",
+                        help="基于 Y 方向二阶矩的 D4σ 直径（ISO 11146），反映焦斑 Y 向尺寸。",
                     )
                     st.metric(
                         "D4σ 平均直径",
                         f"{axis_features['avg_diameter'] * _unit_factor:.2f} {_unit_label}",
+                        help="D4σ X 与 D4σ Y 的几何平均，近似圆对称焦斑等效口径。",
                     )
                 with col_a2:
                     st.metric(
                         "中心强度",
                         f"{axis_features['center_intensity']:.2f}",
+                        help="质心处像素强度。用于判断图像是否饱和或欠曝。",
                     )
 
                 axis_fig = plot_beam_visualization(
@@ -916,9 +921,10 @@ def main():
                     aperture_diameter_m=aperture_diameter * 1e-3,
                     pixel_size_m=axis_pixel,
                 )
-                st.metric("PIB 占比", f"{axis_pib:.4f}")
+                st.metric("PIB 占比", f"{axis_pib:.4f}",
+                          help="Power In Bucket：衍射孔径内能量与总能量之比。基于入瞳直径 D 和波长计算衍射极限孔径。值越接近 1 说明能量越集中。")
                 if is_overexposed:
-                    st.warning("⚠️ 图像可能过曝，PIB占比计算结果可能不准确")
+                    st.warning("⚠️ 图像存在过曝像素，PIB 占比可能偏高（饱和像素低估总能量）。")
 
                 st.subheader("三、强度分布 — 光轴高斯拟合")
                 st.latex(r"f(x) = A \cdot \exp\left(-\frac{1}{2}\left(\frac{x-\mu}{\sigma}\right)^2\right) + b")
@@ -933,10 +939,12 @@ def main():
                     st.metric(
                         "高斯直径 X",
                         f"{axis_gaussian['gaussian_dia_x(um)'] * _unit_factor:.2f} {_unit_label}",
+                        help="X 方向截面高斯拟合的半高宽直径 (2σ)，反映焦斑 X 向高斯宽度。",
                     )
                     st.metric(
                         "高斯直径 Y",
                         f"{axis_gaussian['gaussian_dia_y(um)'] * _unit_factor:.2f} {_unit_label}",
+                        help="Y 方向截面高斯拟合的半高宽直径 (2σ)，反映焦斑 Y 向高斯宽度。",
                     )
 
             if has_axis and has_pupil:
@@ -958,13 +966,14 @@ def main():
                         input_pixel_size=pupil_pixel,
                         output_pixel_size=axis_pixel,
                     )
-                    st.metric("斯特列尔比", f"{strehl:.4f}")
+                    st.metric("斯特列尔比", f"{strehl:.4f}",
+                              help="Strehl Ratio = 实际焦斑峰值强度 / 理想衍射受限焦斑峰值强度（能量守恒归一化）。Strehl ≥ 0.8 为衍射受限。")
                     if strehl >= 0.8:
-                        st.success("光束质量优秀 (Strehl ≥ 0.8)")
+                        st.success("✅ 光束质量优秀 (Strehl ≥ 0.8) — 接近衍射受限")
                     elif strehl >= 0.5:
-                        st.warning("光束质量中等 (0.5 ≤ Strehl < 0.8)")
+                        st.warning("⚠️ 光束质量中等 (0.5 ≤ Strehl < 0.8) — 存在明显像差")
                     else:
-                        st.error("光束质量较差 (Strehl < 0.5)")
+                        st.error("❌ 光束质量较差 (Strehl < 0.5) — 像差严重")
 
                     st.subheader("Strehl 三维重建 — 实际 / 理想 / 光瞳")
                     zmin = min(axis_shifted.min(), ideal_matched.min(), pupil_shifted.min())

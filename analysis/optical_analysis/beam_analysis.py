@@ -51,13 +51,17 @@ def fitting_gaussian(data: np.ndarray) -> tuple[tuple[float, float, float, float
     x_data = np.arange(len(data))
     initial_guess = [np.argmax(data), 10, np.max(data), 0]
     try:
-        (mu, sigma, A, b), covariance = curve_fit(gaussian, x_data, data, p0=initial_guess)
+        (mu, sigma, A, b), covariance = curve_fit(
+            gaussian, x_data, data, p0=initial_guess
+        )
         return (mu, sigma, A, b), covariance
     except RuntimeError:
         return (np.nan, np.nan, np.nan, np.nan), np.nan
 
 
-def center_of_mass_numpy(intensity: np.ndarray, xv: np.ndarray, yv: np.ndarray, moment: int = 1) -> tuple[float, float]:
+def center_of_mass_numpy(
+    intensity: np.ndarray, xv: np.ndarray, yv: np.ndarray, moment: int = 1
+) -> tuple[float, float]:
     """
     计算光强的中心位置
 
@@ -74,7 +78,9 @@ def center_of_mass_numpy(intensity: np.ndarray, xv: np.ndarray, yv: np.ndarray, 
     return (float(c_x), float(c_y))
 
 
-def d4sigma(img: np.ndarray, pixel_size_um: float = 1.0, subtract_background: bool = False) -> dict[str, float]:
+def d4sigma(
+    img: np.ndarray, pixel_size_um: float = 1.0, subtract_background: bool = False
+) -> dict[str, float]:
     """
     计算 D4σ 光斑直径（符合 ISO 11146 标准）
 
@@ -246,8 +252,14 @@ def _ftl_model(R: np.ndarray, I0: float, R_FL: float, q: float) -> np.ndarray:
     return result
 
 
-def _sample_ray(image: np.ndarray, cx: float, cy: float, theta: float,
-                max_radius: int, step: float = 1.0) -> tuple[np.ndarray, np.ndarray]:
+def _sample_ray(
+    image: np.ndarray,
+    cx: float,
+    cy: float,
+    theta: float,
+    max_radius: int,
+    step: float = 1.0,
+) -> tuple[np.ndarray, np.ndarray]:
     """沿单条射线采样图像强度（双线性插值）。
 
     Args:
@@ -285,7 +297,7 @@ def _sample_ray(image: np.ndarray, cx: float, cy: float, theta: float,
 
     I = np.zeros_like(r_arr, dtype=np.float64)
     for yy, yw in [(y0, 1.0 - wy), (y1, wy)]:
-        for xx, xw in [(x0, 1.0 - wx), (x1, xw)]:
+        for xx, xw in [(x0, 1.0 - wx), (x1, wx)]:
             mask = valid & (yy >= 0) & (yy < h) & (xx >= 0) & (xx < w)
             if np.any(mask):
                 I[mask] += xw[mask] * yw[mask] * image[yy[mask], xx[mask]]
@@ -296,9 +308,16 @@ def _fit_ftl_1d(r: np.ndarray, intensity: np.ndarray, max_r: float) -> dict:
     """对单条射线的一维强度剖面做 FTL 拟合。"""
     valid = intensity > 0
     if np.sum(valid) < 5:
-        return {"success": False, "R_FL": np.nan, "R_FL_pixels": np.nan,
-                "q": np.nan, "I0": np.nan, "R_FL_error": np.nan,
-                "q_error": np.nan, "I0_error": np.nan}
+        return {
+            "success": False,
+            "R_FL": np.nan,
+            "R_FL_pixels": np.nan,
+            "q": np.nan,
+            "I0": np.nan,
+            "R_FL_error": np.nan,
+            "q_error": np.nan,
+            "I0_error": np.nan,
+        }
 
     R_fit = r[valid]
     I_fit = intensity[valid]
@@ -307,7 +326,9 @@ def _fit_ftl_1d(r: np.ndarray, intensity: np.ndarray, max_r: float) -> dict:
     q_guess = 4.0
     try:
         popt, pcov = curve_fit(
-            _ftl_model, R_fit, I_fit,
+            _ftl_model,
+            R_fit,
+            I_fit,
             p0=[I0_guess, R_FL_guess, q_guess],
             bounds=([0.0, 0.0, 1.5], [np.inf, float(max_r), 50.0]),
             maxfev=10000,
@@ -325,9 +346,16 @@ def _fit_ftl_1d(r: np.ndarray, intensity: np.ndarray, max_r: float) -> dict:
             "I0_error": float(perr[0]),
         }
     except (RuntimeError, ValueError):
-        return {"success": False, "R_FL": np.nan, "R_FL_pixels": np.nan,
-                "q": np.nan, "I0": np.nan, "R_FL_error": np.nan,
-                "q_error": np.nan, "I0_error": np.nan}
+        return {
+            "success": False,
+            "R_FL": np.nan,
+            "R_FL_pixels": np.nan,
+            "q": np.nan,
+            "I0": np.nan,
+            "R_FL_error": np.nan,
+            "q_error": np.nan,
+            "I0_error": np.nan,
+        }
 
 
 def fit_flat_topped_lorentz(
@@ -385,35 +413,65 @@ def fit_flat_topped_lorentz(
 
     # 1. 全局径向剖面（角向平均）——向后兼容
     profile = compute_radial_profile(
-        image, cx, cy,
+        image,
+        cx,
+        cy,
         max_radius=max_radius,
         radial_step=radial_step,
         min_pixels_per_bin=3,
     )
     if not profile["success"]:
-        return {"success": False, "message": profile["message"], "R_FL": np.nan,
-                "R_FL_pixels": np.nan, "q": np.nan, "I0": np.nan,
-                "R_FL_error": np.nan, "q_error": np.nan, "I0_error": np.nan,
-                "R_FL_std": np.nan, "R_FL_min": np.nan, "R_FL_max": np.nan,
-                "ellipticity_from_ftl": np.nan,
-                "angular_theta_deg": [], "angular_R_FL_pixels": [],
-                "angular_q": [], "angular_I0": [], "angular_success_rate": 0.0,
-                "radial_R": profile["radial_R"] * pixel_size if "radial_R" in profile else np.array([]),
-                "radial_intensity": profile.get("radial_intensity", np.array([])),
-                "fitted_intensity": np.array([])}
+        return {
+            "success": False,
+            "message": profile["message"],
+            "R_FL": np.nan,
+            "R_FL_pixels": np.nan,
+            "q": np.nan,
+            "I0": np.nan,
+            "R_FL_error": np.nan,
+            "q_error": np.nan,
+            "I0_error": np.nan,
+            "R_FL_std": np.nan,
+            "R_FL_min": np.nan,
+            "R_FL_max": np.nan,
+            "ellipticity_from_ftl": np.nan,
+            "angular_theta_deg": [],
+            "angular_R_FL_pixels": [],
+            "angular_q": [],
+            "angular_I0": [],
+            "angular_success_rate": 0.0,
+            "radial_R": profile["radial_R"] * pixel_size
+            if "radial_R" in profile
+            else np.array([]),
+            "radial_intensity": profile.get("radial_intensity", np.array([])),
+            "fitted_intensity": np.array([]),
+        }
 
     valid_mask = profile["valid_mask"]
     if np.sum(valid_mask) < 5:
-        return {"success": False, "message": f"有效径向数据点不足 ({np.sum(valid_mask)} < 5)",
-                "R_FL": np.nan, "R_FL_pixels": np.nan, "q": np.nan, "I0": np.nan,
-                "R_FL_error": np.nan, "q_error": np.nan, "I0_error": np.nan,
-                "R_FL_std": np.nan, "R_FL_min": np.nan, "R_FL_max": np.nan,
-                "ellipticity_from_ftl": np.nan,
-                "angular_theta_deg": [], "angular_R_FL_pixels": [],
-                "angular_q": [], "angular_I0": [], "angular_success_rate": 0.0,
-                "radial_R": profile["radial_R"] * pixel_size,
-                "radial_intensity": profile["radial_intensity"],
-                "fitted_intensity": np.array([])}
+        return {
+            "success": False,
+            "message": f"有效径向数据点不足 ({np.sum(valid_mask)} < 5)",
+            "R_FL": np.nan,
+            "R_FL_pixels": np.nan,
+            "q": np.nan,
+            "I0": np.nan,
+            "R_FL_error": np.nan,
+            "q_error": np.nan,
+            "I0_error": np.nan,
+            "R_FL_std": np.nan,
+            "R_FL_min": np.nan,
+            "R_FL_max": np.nan,
+            "ellipticity_from_ftl": np.nan,
+            "angular_theta_deg": [],
+            "angular_R_FL_pixels": [],
+            "angular_q": [],
+            "angular_I0": [],
+            "angular_success_rate": 0.0,
+            "radial_R": profile["radial_R"] * pixel_size,
+            "radial_intensity": profile["radial_intensity"],
+            "fitted_intensity": np.array([]),
+        }
 
     # 2. 全局（角向平均）径向拟合
     R_fit = profile["radial_R"][valid_mask]
@@ -425,7 +483,9 @@ def fit_flat_topped_lorentz(
 
     try:
         popt, pcov = curve_fit(
-            _ftl_model, R_fit, I_fit,
+            _ftl_model,
+            R_fit,
+            I_fit,
             p0=[I0_guess, R_FL_guess, q_guess],
             bounds=([0.0, 0.0, 1.5], [np.inf, float(max_r), 50.0]),
             maxfev=10000,
@@ -453,7 +513,9 @@ def fit_flat_topped_lorentz(
     if n_angles > 0 and success:
         thetas = np.linspace(0, 2 * np.pi, n_angles, endpoint=False)
         for theta in thetas:
-            r_arr, i_arr = _sample_ray(image, cx, cy, theta, max_radius, step=radial_step)
+            r_arr, i_arr = _sample_ray(
+                image, cx, cy, theta, max_radius, step=radial_step
+            )
             result = _fit_ftl_1d(r_arr, i_arr, max_radius)
             angular_theta_deg.append(np.degrees(theta))
             angular_R_FL_pixels.append(result["R_FL_pixels"])
@@ -489,16 +551,24 @@ def fit_flat_topped_lorentz(
         success_rate = 0.0
 
     return {
-        "R_FL": float(R_FL_mean_px * pixel_size) if not np.isnan(R_FL_mean_px) else np.nan,
+        "R_FL": float(R_FL_mean_px * pixel_size)
+        if not np.isnan(R_FL_mean_px)
+        else np.nan,
         "R_FL_pixels": R_FL_mean_px,
         "q": float(q_fit) if not np.isnan(q_fit) else np.nan,
         "I0": float(I0_fit) if not np.isnan(I0_fit) else np.nan,
         "R_FL_error": float(perr[1] * pixel_size) if len(perr) > 1 else np.nan,
         "q_error": float(perr[2]) if len(perr) > 2 else np.nan,
         "I0_error": float(perr[0]) if len(perr) > 0 else np.nan,
-        "R_FL_std": float(R_FL_std_px * pixel_size) if not np.isnan(R_FL_std_px) else np.nan,
-        "R_FL_min": float(R_FL_min_px * pixel_size) if not np.isnan(R_FL_min_px) else np.nan,
-        "R_FL_max": float(R_FL_max_px * pixel_size) if not np.isnan(R_FL_max_px) else np.nan,
+        "R_FL_std": float(R_FL_std_px * pixel_size)
+        if not np.isnan(R_FL_std_px)
+        else np.nan,
+        "R_FL_min": float(R_FL_min_px * pixel_size)
+        if not np.isnan(R_FL_min_px)
+        else np.nan,
+        "R_FL_max": float(R_FL_max_px * pixel_size)
+        if not np.isnan(R_FL_max_px)
+        else np.nan,
         "ellipticity_from_ftl": fftl_ellipticity,
         "radial_R": profile["radial_R"] * pixel_size,
         "radial_intensity": profile["radial_intensity"],
@@ -620,7 +690,9 @@ def extract_beam_features(
     )
 
     # 高斯拟合直径
-    gaussian_dia = calculate_xy_diameters(img, d4s_features["center_x"], d4s_features["center_y"], pixel_size_um)
+    gaussian_dia = calculate_xy_diameters(
+        img, d4s_features["center_x"], d4s_features["center_y"], pixel_size_um
+    )
 
     return {
         "centroid": centroid,

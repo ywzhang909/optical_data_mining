@@ -1186,45 +1186,6 @@ def main():
                         f"{zernike_result['n_terms']}",
                     ]
 
-            if has_axis:
-                results["参数"] += [
-                    f"光轴 D4σ X ({_unit_label})",
-                    f"光轴 D4σ Y ({_unit_label})",
-                    f"光轴 D4σ 平均 ({_unit_label})",
-                    "PIB",
-                    f"光轴 高斯直径 X ({_unit_label})",
-                    f"光轴 高斯直径 Y ({_unit_label})",
-                ]
-                results["值"] += [
-                    f"{axis_features['D_x'] * _unit_factor:.2f}",
-                    f"{axis_features['D_y'] * _unit_factor:.2f}",
-                    f"{axis_features['avg_diameter'] * _unit_factor:.2f}",
-                    f"{axis_pib:.4f}",
-                    f"{axis_gaussian['gaussian_dia_x(um)'] * _unit_factor:.2f}",
-                    f"{axis_gaussian['gaussian_dia_y(um)'] * _unit_factor:.2f}",
-                ]
-                results["值"] += [
-                    f"{pupil_features['D_x'] * _unit_factor:.2f}",
-                    f"{pupil_features['D_y'] * _unit_factor:.2f}",
-                    f"{pupil_features['avg_diameter'] * _unit_factor:.2f}",
-                    f"{pupil_border['border_radius']:.2f}",
-                    f"{pupil_border['border_radius'] * 2:.2f}",
-                    f"{pupil_border['eccentricity']:.4f}",
-                    f"{pupil_border['confidence']:.4f}",
-                ]
-                if not np.isnan(pupil_ellipse.get("ellipticity", np.nan)):
-                    results["参数"] += [
-                        "短轴 (px)", "长轴 (px)",
-                        "椭圆度", "倾角 (°)", "椭圆内均匀度",
-                    ]
-                    results["值"] += [
-                        f"{pupil_ellipse['short_axis']:.2f}",
-                        f"{pupil_ellipse['long_axis']:.2f}",
-                        f"{pupil_ellipse['ellipticity']:.4f}",
-                        f"{pupil_ellipse['angle']:.1f}",
-                        f"{pupil_ellipse['uniformity']:.4f}",
-                    ]
-
             import pandas as pd
 
             results_df = pd.DataFrame(results)

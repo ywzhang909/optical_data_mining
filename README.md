@@ -1,156 +1,218 @@
-# 数字光学数据分析 — Laser Beam Quality Analysis Toolkit
+# AO光束质量分析 — Streamlit Cloud
 
-Python 3.12+ 工具包，从消息队列获取光斑文件信息，进行光束质量分析（D4σ、Strehl、M²、BPP 等），并通过 Streamlit 可视化结果。
+上传光轴(Axis)和光瞳(Pupil)图像，自动计算激光光束质量关键指标：D4σ、PIB、Strehl、BPP、M²、Zernike 波前像差等。
+
+---
+
+## 目录
+
+- [在线访问](#在线访问)
+- [本地使用](#本地使用)
+- [功能说明](#功能说明)
+- [项目结构](#项目结构)
+- [二次开发](#二次开发)
+- [技术栈](#技术栈)
+
+---
+
+## 在线访问
+
+部署到 [Streamlit Cloud](https://streamlit.io/cloud)（推荐）：
+
+1. 将此仓库 fork 或 push 到你的 GitHub
+2. 登录 [share.streamlit.io](https://share.streamlit.io)
+3. 点击 **New app** → 选择该仓库 + 分支 `streamlit-cloud`
+4. 入口文件：`streamlit_app.py`
+5. 部署完成后即可通过生成的 URL 在线访问
+
+### 依赖安装
+
+Streamlit Cloud 会自动读取 `requirements.txt` 安装依赖，无需手动操作。
+
+---
+
+## 本地使用
+
+### 环境要求
+
+- Python 3.12+
+- pip 或 uv
+
+### 安装与运行
+
+```bash
+# 克隆仓库
+git clone <your-repo-url>
+cd <repo-dir>
+git checkout streamlit-cloud
+
+# 方式一：pip
+pip install -r requirements.txt
+streamlit run streamlit_app.py
+
+# 方式二：uv（推荐，更快）
+uv pip install -r requirements.txt
+uv run streamlit run streamlit_app.py
+
+# 方式三：虚拟环境
+python -m venv .venv
+.venv\Scripts\activate  # Windows
+source .venv/bin/activate  # Linux/Mac
+pip install -r requirements.txt
+streamlit run streamlit_app.py
+```
+
+浏览器打开 `http://localhost:8501` 即可使用。
+
+---
+
+## 功能说明
+
+### 分析流程
+
+1. **上传图片**：在侧边栏分别上传光轴(Axis)和/或光瞳(Pupil)图片
+2. **设置参数**：配置相机参数（像素尺寸）、处理参数（去暗场方法）
+3. **选择光瞳类型**：平顶光(Flat-Top) / 高斯光(Gaussian)
+4. **点击计算**：系统自动计算所有适用指标
+5. **查看结果**：可视化图表 + 结果汇总表 + CSV 导出
+
+### 支持的计算指标
+
+| 指标 | 说明 | 需要图片 |
+|------|------|----------|
+| **D4σ 直径** | ISO 11146 标准二阶矩直径（X/Y/平均） | Axis / Pupil |
+| **PIB 占比** | 桶中功率比（Power In Bucket） | Axis |
+| **高斯拟合直径** | X/Y 截面高斯拟合半高宽直径 | Axis |
+| **FTL 特征半径 R_FL** | 平顶光 Flat-Topped Lorentz 拟合 | Pupil（平顶光模式） |
+| **均匀度分析** | RMS / P-V 非均匀度 | Pupil（平顶光模式） |
+| **包围圆检测** | minEnclosingCircle 拟合 + 椭圆拟合 | Pupil |
+| **BPP** | 光束参数积（Beam Parameter Product） | Axis + Pupil |
+| **M²** | 光束质量因子 | Axis + Pupil |
+| **斯特列尔比** | 能量守恒法 Strehl Ratio | Axis + Pupil |
+| **Zernike 波前** | Zernike 多项式（Noll 归一化）波前像差分解 | Pupil |
+| **3D 可视化** | Plotly 交互式 3D 光强表面 | Axis / Pupil |
+
+### 参数说明
+
+在侧边栏可以配置：
+
+- **相机参数**：光轴/光瞳相机像素尺寸（μm）
+- **去暗场方法**：无 / 中值 / 最小值 / 1/e / 手动输入
+- **光瞳类型**：平顶光(FTL拟合) / 高斯光(高斯拟合)
+- **均匀度边界**：包围圆 / 椭圆 / FTL特征半径 / 二阶矩半径
+- **光学参数**：波长、焦距、入瞳直径
+- **显示单位**：μm / mm / nm 动态切换
+- **Zernike阶数**：4~10阶可配置
+
+---
 
 ## 项目结构
 
 ```
-src/data_mining/input_sources/     # 消息队列输入源（Kafka / RabbitMQ / 文件系统 / ZIP）
-  ├── kafka_input.py               # Kafka 消费者 → pd.DataFrame
-  ├── rabbitmq_input.py            # RabbitMQ 消费者 → pd.DataFrame
-  ├── filesystem_input.py          # 本地文件读取
-  └── zip_input.py                 # ZIP 归档解压读取
-
-ui/                                # Streamlit + FastAPI 应用
-  ├── ao_analysis_app.py           # AO 光束质量分析仪表盘（核心功能）
-  ├── streamlit_dashboard.py       # Pipeline 监控仪表盘
-  ├── server/                      # FastAPI 后端
-  └── analysis/                    # 光束分析算法
-      ├── optical_analysis/        # D4σ, PIB, Strehl, M², BPP, 衍射, FTL
-      └── image/                   # 图像 I/O, 特征提取, 径向剖面
-
-notebooks/                         # Jupyter 交互式分析脚本
-tests/                             # pytest 测试（92 tests）
+├── streamlit_app.py              # 主入口（Streamlit 应用）
+├── analysis/                     # 光束分析算法包
+│   ├── __init__.py
+│   ├── image/
+│   │   ├── __init__.py
+│   │   └── common.py             # 图像 I/O、特征提取、径向剖面
+│   └── optical_analysis/
+│       ├── __init__.py           # 模块入口，统一导出
+│       ├── beam_analysis.py      # D4σ, PIB, 高斯拟合, BPP, M²
+│       ├── beam_analysis_metrics.py  # 综合分析类
+│       ├── diffraction.py        # 菲涅尔衍射, 斯特列尔比, FFT居中
+│       ├── history_manager.py    # 分析结果历史记录
+│       ├── image_utils.py        # 图像读取、去暗场、椭圆拟合
+│       ├── uniform_analysis.py   # 平顶光均匀度分析
+│       ├── zernike_analysis.py   # Zernike 波前分解
+│       └── visualization/
+│           ├── __init__.py
+│           └── beam_visualization.py  # Plotly 3D 可视化
+├── requirements.txt              # Python 依赖
+├── .streamlit/
+│   └── config.toml               # Streamlit Cloud 配置
+└── README.md
 ```
 
-## 快速开始
+### 关键模块说明
 
-```bash
-# 安装（uv 或 pip）
-uv sync --dev
-# 或: pip install -e . && pip install -e .[dev]
+| 模块 | 文件 | 功能 |
+|------|------|------|
+| **图像输入** | `image/common.py` | TIFF/PNG/JPG 读取 → numpy 数组，径向/横纵截面提取 |
+| **光束分析** | `optical_analysis/beam_analysis.py` | 核心算法：d4sigma, pib_ratio, gaussian, fitting_gaussian, calculate_xy_diameters, calculate_bpp |
+| **衍射计算** | `optical_analysis/diffraction.py` | shift_to_center_fft, calculate_strehl_ratio_with_energy_conservation |
+| **图像工具** | `optical_analysis/image_utils.py` | read_image_to_numpy, subtract_dark_field, find_spot_border, ellipse_fit |
+| **波前分析** | `optical_analysis/zernike_analysis.py` | fit_zernike, zernike_order_label, make_zernike_grid |
+| **均匀度** | `optical_analysis/uniform_analysis.py` | calculate_uniformity_metrics, plot_uniformity_analysis |
+| **可视化** | `streamlit_app.py`(内建) | 3D Plotly 表面图、D4σ圆、XY截面、极坐标图 |
 
-# AO 光束质量分析（独立运行，无需后端）
-uv run streamlit run ui/ao_analysis_app.py
+---
 
-# Pipeline 监控仪表盘（需后端）
-uv run uvicorn ui.server.main:app --reload --port 8000 &
-uv run streamlit run ui/streamlit_dashboard.py --server.port 8501
+## 二次开发
 
-# 运行测试
-uv run pytest tests/ -v
+### 添加新的分析算法
 
-# 静态检查
-uv run ruff check src/ ui/analysis/ ui/
-uv run ruff format src/ ui/analysis/ --check
-```
+1. 在 `analysis/optical_analysis/` 下创建新模块（如 `new_analysis.py`）
+2. 实现分析函数，遵循现有约定（输入为 numpy 数组，返回 dict）
+3. 在 `analysis/optical_analysis/__init__.py` 中导出
+4. 在 `streamlit_app.py` 的 `main()` 函数中调用并渲染结果
 
-## 核心功能
+示例：
 
-### 消息队列输入（`src/data_mining/input_sources/`）
-
-| 类 | 用途 | 可选依赖 |
-|---|---|---|
-| `KafkaInput` | 从 Kafka topic 消费 JSON 消息 → DataFrame | `kafka-python` |
-| `RabbitMQInput` | 从 RabbitMQ 队列消费 JSON 消息 → DataFrame | `pika` |
-| `FileSystemInput` | 读取目录下 CSV/JSON 文件 → DataFrame | — |
-| `ZipInput` | 解压 ZIP 归档并读取内部 CSV/JSON → DataFrame | — |
-
-消息格式示例（`data_processing_queue`）：
 ```python
-{
-    "data_experiment_id": "20260326_001",
-    "data_original_path": "/path/to/beam.TIFF",
-    "data_info": {"name": "beam.TIFF", "type": "tiff", "size": 5039098},
-    "is_unstructured": False
-}
+# analysis/optical_analysis/new_analysis.py
+import numpy as np
+
+def my_metric(image: np.ndarray) -> dict:
+    """自定义分析指标"""
+    result = np.mean(image)
+    return {"my_metric": float(result)}
+
+# analysis/optical_analysis/__init__.py
+from .new_analysis import my_metric
 ```
 
-### 光束分析（`ui/analysis/optical_analysis/`）
+### 修改前端界面
 
-| 函数 | 说明 |
-|---|---|
-| `d4sigma()` | D4σ 光斑直径（ISO 11146） |
-| `pib_ratio()` | 桶中功率比（Power In Bucket） |
-| `calculate_bpp()` | 光束参数积 |
-| `calculate_m2()` | 光束质量因子 M² |
-| `calculate_centroid()` | 质心计算 |
-| `fit_flat_topped_lorentz()` | FTL (Flat-Topped Lorentz) 平顶光模型拟合，计算特征半径 R_FL |
-| `fitting_gaussian()` | 一维高斯拟合：f(x) = A·exp(-½((x-μ)/σ)²) + b |
-| `calculate_xy_diameters()` | 基于高斯拟合的 X/Y 方向直径 |
-| `shift_to_center_fft()` | FFT 亚像素移位居中 |
-| `calculate_strehl_ratio_with_energy_conservation()` | 能量守恒斯特列尔比 |
-| `fnr3()` | 菲涅尔衍射积分（向量化） |
-| `angular_spectrum_propagation()` | 角谱传播法 |
-| `BeamAnalysisMetrics` | 综合分析类（一键计算全部指标） |
+- `streamlit_app.py` 中的 `main()` 函数控制所有 UI 布局
+- 使用 Streamlit 原生组件：`st.columns`, `st.metric`, `st.pyplot`, `st.plotly_chart`
+- 图表绘制使用 `matplotlib`（静态图）和 `plotly`（交互式 3D）
+- 侧边栏参数通过 `st.sidebar` 管理
 
-### 图像处理（`ui/analysis/image/`）
+### 部署自定义版本
 
-| 函数 | 说明 |
-|---|---|
-| `read_tiff_to_numpy()` | TIFF/PNG 读取 → numpy 数组 |
-| `get_profiles()` | 光斑横纵截面强度分布 |
-| `compute_radial_profile()` | 径向强度分布（方位角平均），FTL 拟合共用工具 |
-| `cartesian_to_polar()` | 直角坐标 → 极坐标转换 |
-| `polar_to_cartesian()` | 极坐标 → 直角坐标转换 |
-| `fourier_shift_to_center()` | 傅里叶亚像素平移 |
-| `extract_radial_data()` | 径向数据提取 |
-| `convert_to_cv()` | numpy → OpenCV uint8 格式 |
+1. Fork 本仓库
+2. 在 `streamlit-cloud` 分支上修改
+3. 修改 `requirements.txt` 添加新依赖
+4. 推送到 GitHub → Streamlit Cloud 自动重新部署
 
-### AO 光束质量分析仪表盘（`ui/ao_analysis_app.py`）
-
-侧边栏功能：
-- **光瞳类型选择**：平顶光 (Flat-Top) / 高斯光 (Gaussian)
-  - 平顶光 → FTL 模型拟合 R_FL + Uniformity 分析
-  - 高斯光 → 截面高斯拟合 + 束腰位置/直径
-- **显示单位**：μm / mm / nm，动态切换所有长度/直径值的显示格式
-- 积分球/光轴相机像素尺寸、去暗场方法、光学参数（波长、焦距、入瞳直径）
-
-分析结果：
-- D4σ 直径（X/Y/平均），PIB 占比
-- 高斯拟合直径（基于 X/Y 截面）
-- 包围圆检测与可视化
-- FTL 径向拟合图（平顶光）或截面高斯拟合图（高斯光）
-- BPP、发散角、M²、斯特列尔比
-- 3D Plotly 表面可视化（光轴 vs 理想 vs 光瞳）
-- 结果汇总表 + CSV 导出
-
-## 代码审计与重构
-
-项目已通过以下代码质量改进：
-
-- **重复代码移除**：`plot_3d_visualization()` 中范围归一化代码块被复制两次，已删除冗余副本
-- **深层嵌套优化**：将 FTL 径向绘图（`_render_ftl_radial_plot`）和光瞳类型分析（`_render_pupil_type_analysis`）提取为独立函数，`main()` 嵌套深度从 6 级降至 4 级
-- **工具函数提取**：`compute_radial_profile()` 从 `fit_flat_topped_lorentz()` 提取到 `analysis.image.common`，供模块内复用
-- **变量初始化完善**：`uniformity_pupil` 总是通过函数返回值初始化，消除潜在 `NameError`
-
-## 开发
+### 本地调试
 
 ```bash
-# 安装开发依赖
-uv sync --dev
+# 热重载模式（代码修改后自动刷新）
+streamlit run streamlit_app.py --server.runOnSave true
 
-# 代码检查
-uv run ruff check src/ ui/analysis/ ui/
-uv run ruff format src/ ui/analysis/ --check
-
-# 测试
-uv run pytest tests/ -v --tb=short
-uv run pytest tests/ -m "not slow"
+# 指定端口
+streamlit run streamlit_app.py --server.port 8080
 ```
 
-## 依赖管理
+---
 
-项目使用 `uv` 管理依赖。核心依赖在 `pyproject.toml` 的 `[project.dependencies]` 中声明：
+## 技术栈
 
-| 组 | 安装命令 | 包含 |
-|---|---|---|
-| 核心 | `uv sync` | numpy, scipy, opencv, streamlit, fastapi, ... |
-| Kafka | `uv sync --group kafka` | `kafka-python` |
-| RabbitMQ | `uv sync --group rabbitmq` | `pika` |
-| BM3D | `uv sync --group bm3d` | `bm3d` |
-| 开发 | `uv sync --dev` | pytest, ruff, ipykernel |
+| 技术 | 用途 |
+|------|------|
+| [Streamlit](https://streamlit.io/) | Web 应用框架 |
+| [NumPy](https://numpy.org/) | 数值计算 |
+| [SciPy](https://scipy.org/) | 优化拟合、图像处理 |
+| [OpenCV](https://opencv.org/) | 图像边缘检测、椭圆拟合 |
+| [Matplotlib](https://matplotlib.org/) | 2D 静态图表 |
+| [Plotly](https://plotly.com/python/) | 交互式 3D 可视化 |
+| [Pillow](https://python-pillow.org/) | 图像文件读写 |
+| [scikit-image](https://scikit-image.org/) | 图像处理辅助 |
+| [Loguru](https://loguru.readthedocs.io/) | 日志记录 |
 
-## 许可证
+---
 
-MIT License
+## License
+
+MIT

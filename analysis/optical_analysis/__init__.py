@@ -70,7 +70,6 @@ from .image_utils import (
 # Zernike 波前分解模块
 from .zernike_analysis import (
     fit_zernike,
-    make_zernike_grid,
     recommend_zernike_order,
     zernike_order_label,
 )
@@ -116,7 +115,6 @@ __all__ = [
     "ellipse_fit",
     # zernike_analysis
     "fit_zernike",
-    "make_zernike_grid",
     "recommend_zernike_order",
     "zernike_order_label",
     # beam_analysis_metrics

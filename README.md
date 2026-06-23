@@ -145,7 +145,7 @@ streamlit run streamlit_app.py
 | **光束分析** | `optical_analysis/beam_analysis.py` | 核心算法：d4sigma, pib_ratio, gaussian, fitting_gaussian, calculate_xy_diameters, calculate_bpp |
 | **衍射计算** | `optical_analysis/diffraction.py` | shift_to_center_fft, calculate_strehl_ratio_with_energy_conservation |
 | **图像工具** | `optical_analysis/image_utils.py` | read_image_to_numpy, subtract_dark_field, find_spot_border, ellipse_fit |
-| **波前分析** | `optical_analysis/zernike_analysis.py` | fit_zernike, zernike_order_label, make_zernike_grid |
+| **波前分析** | `optical_analysis/zernike_analysis.py` | fit_zernike, zernike_order_label |
 | **均匀度** | `optical_analysis/uniform_analysis.py` | calculate_uniformity_metrics, plot_uniformity_analysis |
 | **可视化** | `streamlit_app.py`(内建) | 3D Plotly 表面图、D4σ圆、XY截面、极坐标图 |
 

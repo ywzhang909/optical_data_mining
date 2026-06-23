@@ -22,7 +22,6 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 from matplotlib.patches import Circle
@@ -41,7 +40,6 @@ from analysis.optical_analysis import (  # noqa: E402
     d4sigma,
     fit_flat_topped_lorentz,
     fitting_gaussian,
-    gaussian,
     pib_ratio,
     read_image_to_numpy,
     shift_to_center_fft,
@@ -53,6 +51,15 @@ from analysis.optical_analysis.image_utils import find_spot_border, find_spot_bo
 from analysis.optical_analysis.uniform_analysis import (  # noqa: E402
     calculate_uniformity_metrics,
     plot_uniformity_analysis,
+)
+from analysis.optical_analysis.visualization import (  # noqa: E402
+    plot_beam_visualization,
+    plot_3d_visualization,
+    plot_gaussian_cross_section,
+    plot_ftl_polar,
+    plot_ftl_angular,
+    plot_ftl_q_polar,
+    plot_zernike_barchart,
 )
 
 # 配置中文字体
@@ -68,157 +75,6 @@ plt.rcParams["axes.unicode_minus"] = False
 # 配置loguru：移除默认handler，添加INFO级别handler
 logger.remove()
 logger.add(sys.stderr, level="INFO")
-
-
-def plot_beam_visualization(img, title, pixel_size_um, features):
-    """
-    绘制光束可视化图：
-    - 质心标记
-    - D4σ圆
-    - XY 轴切面光强曲线（同一子图）
-
-    Args:
-        img: 原始图像
-        title: 标题
-        pixel_size_um: 像素尺寸（微米）
-        features: 特征字典，包含center_x, center_y, D_x, D_y, avg_diameter
-
-    Returns:
-        fig: matplotlib图像
-    """
-    # 直接使用输入图像，不去噪
-    img = np.asarray(img, dtype=np.float64)
-
-    cx, cy = features["center_x"], features["center_y"]
-    # 使用平均sigma2作为半径
-    r_pix = features["avg_diameter"] / pixel_size_um / 2  # 半径（像素）
-
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-
-    # 1. Centroid + D4σ circle
-    ax1 = axes[0]
-    im1 = ax1.imshow(img, cmap="hot", interpolation="bilinear")
-    ax1.set_title(f"{title} - Centroid & D4σ", fontsize=12)
-    plt.colorbar(im1, ax=ax1, shrink=0.8)
-
-    # Mark centroid
-    ax1.plot(cx, cy, "c+", markersize=15, markeredgewidth=2, label="Centroid")
-    # Draw D4σ circle (using average diameter)
-    circle = Circle(
-        (cx, cy),
-        radius=r_pix,
-        fill=False,
-        color="cyan",
-        linewidth=2,
-        linestyle="--",
-        label=f"D4σ (r={features['avg_diameter'] / 2:.1f}μm)",
-    )
-    ax1.add_patch(circle)
-    ax1.legend(loc="upper right", fontsize=8)
-    ax1.set_xlabel("X (pixel)")
-    ax1.set_ylabel("Y (pixel)")
-
-    # 2. X + Y direction profiles (combined)
-    ax2 = axes[1]
-    x_data = img[int(cy), :]
-    x_pixels = np.arange(len(x_data))
-    x_um = (x_pixels - cx) * pixel_size_um  # Convert to μm
-
-    y_data = img[:, int(cx)]
-    y_pixels = np.arange(len(y_data))
-    y_um = (y_pixels - cy) * pixel_size_um  # Convert to μm
-
-    ax2.plot(x_um, x_data, "b-", linewidth=1.5, label="X profile")
-    ax2.plot(y_um, y_data, "g-", linewidth=1.5, label="Y profile")
-    ax2.axvline(x=0, color="gray", linestyle=":", alpha=0.7, label="Centroid")
-
-    max_val = max(np.max(x_data), np.max(y_data))
-    if max_val > 0:
-        ax2.axhline(
-            y=max_val / np.e, color="r", linestyle="--", alpha=0.5, label="1/e peak"
-        )
-    ax2.set_title(f"{title} - Cross-section Profiles", fontsize=12)
-    ax2.set_xlabel("Offset (μm)")
-    ax2.set_ylabel("Intensity")
-    ax2.legend(fontsize=8)
-    ax2.grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    return fig
-
-
-def plot_3d_visualization(img, title, zmin=None, zmax=None):
-    """
-    使用Plotly绘制3D表面图
-
-    Args:
-        img: 输入图像数组
-        title: 标题
-        zmin: 颜色轴最小值（用于统一尺度）
-        zmax: 颜色轴最大值（用于统一尺度）
-
-    Returns:
-        plotly_fig: Plotly 3D图表
-    """
-    # 直接使用输入图像，不去噪
-    img = np.asarray(img, dtype=np.float64)
-
-    # 降采样以提高渲染速度
-    step = max(1, min(img.shape[0], img.shape[1]) // 100)
-    x = np.arange(0, img.shape[1], step)
-    y = np.arange(0, img.shape[0], step)
-    X, Y = np.meshgrid(x, y)
-    Z = img[::step, ::step]
-
-    # 统一尺度
-    if zmin is None:
-        zmin = Z.min()
-    if zmax is None:
-        zmax = Z.max()
-
-    # 计算xyz范围，用于统一尺度
-    x_range = X.max() - X.min()
-    y_range = Y.max() - Y.min()
-    z_range = zmax - zmin
-
-    # 归一化Z到与XY相同的尺度范围，使xyz视觉比例一致
-    if z_range > 0:
-        target_range = (x_range + y_range) / 2
-        Z_display = (Z - zmin) / z_range * target_range
-    else:
-        Z_display = Z - zmin
-
-    # 创建Plotly 3D表面图
-    plotly_fig = go.Figure(
-        data=[
-            go.Surface(
-                x=X,
-                y=Y,
-                z=Z_display,
-                colorscale="Hot",
-                cmin=zmin,
-                cmax=zmax,
-                colorbar=dict(title="Intensity"),
-                hovertemplate="X: %{x:.1f}<br>Y: %{y:.1f}<br>Intensity: %{z:.1f}<extra></extra>",
-            )
-        ]
-    )
-
-    plotly_fig.update_layout(
-        title=f"{title} - 3D Surface",
-        scene=dict(
-            xaxis_title="X (pixel)",
-            yaxis_title="Y (pixel)",
-            zaxis_title="Intensity",
-            aspectmode="data",
-            aspectratio=dict(x=1, y=1, z=1),
-        ),
-        width=800,
-        height=600,
-        margin=dict(l=50, r=50, b=50, t=50),
-    )
-
-    return plotly_fig
 
 
 def _render_pupil_type_analysis(
@@ -265,33 +121,12 @@ def _render_pupil_type_analysis(
                 st.metric("Y 方向束腰 σ", f"{v_sigma:.2f} px",
                           help=f"垂直截面高斯拟合 1σ 宽度 (像素)。光束高斯直径 (2σ) = {2 * v_sigma:.2f} px")
 
-            # 绘制截面 + 拟合曲线
-            fig_gs, (ax_h, ax_v) = plt.subplots(1, 2, figsize=(12, 4))
-            x_h = np.arange(len(h_prof))
-            x_h_fit = np.linspace(0, len(h_prof) - 1, 200)
-            ax_h.plot(x_h, h_prof, "b-", alpha=0.6, linewidth=1.5, label="原始数据")
-            ax_h.plot(x_h_fit, gaussian(x_h_fit, h_mu, h_sigma, h_A, h_b),
-                      "r-", linewidth=2, label="高斯拟合")
-            ax_h.axvline(h_mu, color="g", linestyle="--", alpha=0.7, label=f"μ={h_mu:.2f}")
-            ax_h.set_xlabel("像素")
-            ax_h.set_ylabel("强度")
-            ax_h.set_title("水平截面（X 方向）")
-            ax_h.legend(fontsize=8)
-            ax_h.grid(True, alpha=0.3)
-
-            x_v = np.arange(len(v_prof))
-            x_v_fit = np.linspace(0, len(v_prof) - 1, 200)
-            ax_v.plot(x_v, v_prof, "b-", alpha=0.6, linewidth=1.5, label="原始数据")
-            ax_v.plot(x_v_fit, gaussian(x_v_fit, v_mu, v_sigma, v_A, v_b),
-                      "r-", linewidth=2, label="高斯拟合")
-            ax_v.axvline(v_mu, color="g", linestyle="--", alpha=0.7, label=f"μ={v_mu:.2f}")
-            ax_v.set_xlabel("像素")
-            ax_v.set_ylabel("强度")
-            ax_v.set_title("垂直截面（Y 方向）")
-            ax_v.legend(fontsize=8)
-            ax_v.grid(True, alpha=0.3)
-
-            plt.tight_layout()
+            # 绘制截面 + 拟合曲线（委托渲染器）
+            fig_gs = plot_gaussian_cross_section(
+                h_prof, v_prof,
+                h_mu, h_sigma, h_A, h_b,
+                v_mu, v_sigma, v_A, v_b,
+            )
             st.pyplot(fig_gs)
 
             pupil_cross_section = {
@@ -328,9 +163,9 @@ def _render_pupil_type_analysis(
 
 
 def main():
-    st.set_page_config(page_title="AO光束质量分析", page_icon="🔬", layout="wide")
+    st.set_page_config(page_title="光束质量分析", page_icon="🔬", layout="wide")
 
-    st.title("🔬 AO光束质量分析")
+    st.title("🔬 光束质量分析")
     st.markdown(
         "上传一张**光轴**图片和一张**光瞳**图片，自动计算相关特征量并可视化结果  [帮助](https://github.com/ywzhang909/optical_data_mining/blob/streamlit-cloud/README.md)"
     )
@@ -399,10 +234,23 @@ def main():
     st.sidebar.subheader("📐 均匀度边界")
     uniformity_boundary_type = st.sidebar.radio(
         "边界类型",
-        ["包围圆 (Enclosing circle)", "包围椭圆 (Ellipse)", "FTL 特征半径", "二阶矩半径 (2nd moment)"],
+        ["包围圆 (Enclosing circle)", "包围椭圆 (Ellipse)", "FTL 特征半径", "二阶矩半径 (2nd moment)", "手动输入 (Manual)"],
         index=0,
         help="平顶光均匀度分析的光斑边界选取方式。包围圆/椭圆基于轮廓检测，FTL 基于拟合特征半径，二阶矩半径基于 D4σ。仅平顶光模式生效。",
     )
+
+    # 手动边界输入
+    manual_center_x: float | None = None
+    manual_center_y: float | None = None
+    manual_radius: float | None = None
+    if uniformity_boundary_type == "手动输入 (Manual)":
+        st.sidebar.caption("手动指定均匀度边界圆心和半径（像素坐标）")
+        col1, col2 = st.sidebar.columns(2)
+        with col1:
+            manual_center_x = st.number_input("中心 X", value=320.0, format="%.1f")
+            manual_center_y = st.number_input("中心 Y", value=240.0, format="%.1f")
+        with col2:
+            manual_radius = st.number_input("半径 (px)", value=200.0, min_value=1.0, format="%.1f")
 
     # FTL 角度采样
     st.sidebar.subheader("🔦 FTL 角度采样")
@@ -595,6 +443,67 @@ def main():
                         help="轮廓与圆拟合置信度（0-1），越高越接近规则圆形。",
                     )
 
+                # ----- 能量指标：峰值光强、总能量、能量集中度 -----
+                _peak_intensity = float(np.max(pupil_denoise))
+                _total_energy = float(np.sum(pupil_denoise))
+                # 围困能量曲线：按径向距离排序计算累计能量占比
+                _cx = pupil_features["center_x"]
+                _cy = pupil_features["center_y"]
+                _h_p, _w_p = pupil_denoise.shape
+                _y_i, _x_i = np.indices((_h_p, _w_p))
+                _R = np.sqrt((_x_i - _cx) ** 2 + (_y_i - _cy) ** 2)
+                _sort_idx = np.argsort(_R.ravel())
+                _sorted_R = _R.ravel()[_sort_idx]
+                _sorted_E = pupil_denoise.ravel()[_sort_idx]
+                _cum_E = np.cumsum(_sorted_E)
+                _cum_norm = _cum_E / _cum_E[-1] if _cum_E[-1] > 0 else _cum_E
+                # 提取关键能量占比对应半径
+                _r50 = _sorted_R[np.searchsorted(_cum_norm, 0.50)] if np.searchsorted(_cum_norm, 0.50) < len(_sorted_R) else np.nan
+                _r80 = _sorted_R[np.searchsorted(_cum_norm, 0.80)] if np.searchsorted(_cum_norm, 0.80) < len(_sorted_R) else np.nan
+                _r95 = _sorted_R[np.searchsorted(_cum_norm, 0.95)] if np.searchsorted(_cum_norm, 0.95) < len(_sorted_R) else np.nan
+
+                col_em1, col_em2 = st.columns([1, 1])
+                with col_em1:
+                    st.metric("峰值光强", f"{_peak_intensity:.2f}",
+                              help="光斑内像素强度最大值，反映信号峰值水平。")
+                with col_em2:
+                    st.metric("总能量", f"{_total_energy:.2e}",
+                              help="光斑内像素强度总和，反映光束总功率的相对值。")
+                # 能量集中度饼图：按径向分区展示能量占比
+                _ring_labels = []
+                _ring_sizes = []
+                _ring_colors = []
+                if not np.isnan(_r50) and not np.isnan(_r80) and not np.isnan(_r95):
+                    # 查找径向环对应累计能量端点
+                    _idx_r50 = np.searchsorted(_cum_norm, 0.50)
+                    _idx_r80 = np.searchsorted(_cum_norm, 0.80)
+                    _idx_r95 = np.searchsorted(_cum_norm, 0.95)
+                    # 环内能量 = 端点累计差
+                    _e50 = _cum_norm[_idx_r50] if _idx_r50 < len(_cum_norm) else 0.50  # ≈ 0.50
+                    _e80 = _cum_norm[_idx_r80] - _cum_norm[_idx_r50] if _idx_r80 < len(_cum_norm) else 0.30
+                    _e95 = _cum_norm[_idx_r95] - _cum_norm[_idx_r80] if _idx_r95 < len(_cum_norm) else 0.15
+                    _erem = 1.0 - _e50 - _e80 - _e95 if _e50 + _e80 + _e95 < 1.0 else 0.0
+                    _ring_labels = [
+                        f"核心\n(r≤{_r50:.0f}px)\n{_e50*100:.0f}%",
+                        f"内环\n({_r50:.0f}<r≤{_r80:.0f}px)\n{_e80*100:.0f}%",
+                        f"外环\n({_r80:.0f}<r≤{_r95:.0f}px)\n{_e95*100:.0f}%",
+                        f"边缘\n(r>{_r95:.0f}px)\n{_erem*100:.0f}%",
+                    ]
+                    _ring_sizes = [_e50, _e80, _e95, _erem]
+                    _ring_colors = ["#e74c3c", "#f39c12", "#3498db", "#95a5a6"]
+                else:
+                    _ring_labels = ["N/A"]
+                    _ring_sizes = [1.0]
+                    _ring_colors = ["#bdc3c7"]
+                _fig_pie, _ax_pie = plt.subplots(figsize=(4.5, 3.5))
+                _ax_pie.pie(
+                    _ring_sizes, labels=_ring_labels, colors=_ring_colors,
+                    startangle=90, textprops={"fontsize": 8},
+                    wedgeprops={"linewidth": 1, "edgecolor": "white"},
+                )
+                _ax_pie.set_title("能量集中度 η(r) — 径向能量环分布", fontsize=10)
+                st.pyplot(_fig_pie)
+
                 # ===== 二、形状分析：椭圆拟合 =====
                 st.subheader("二、形状分析 — 椭圆拟合")
                 pupil_uint8 = (pupil_denoise - pupil_denoise.min()) / (pupil_denoise.max() - pupil_denoise.min()) * 255
@@ -616,6 +525,58 @@ def main():
                                   help="椭圆主轴相对水平方向的旋转角度。")
                     st.metric("椭圆内均匀度", f"{pupil_ellipse['uniformity']:.4f}",
                               help="椭圆轮廓内 std/mean，越小越均匀。")
+
+                    # ----- 边界类型对比图（光瞳 + 所有边界圆） -----
+                    _pixel_size_um = pupil_pixel * 1e6
+                    _r2m = pupil_features["avg_diameter"] / _pixel_size_um / 2.0
+                    _shape_boundaries: list[dict] = [
+                        {
+                            "label": "包围圆",
+                            "cx": pupil_border["border_x"],
+                            "cy": pupil_border["border_y"],
+                            "radius": pupil_border["border_radius"],
+                            "color": "yellow",
+                            "linestyle": "-.",
+                        },
+                        {
+                            "label": "椭圆",
+                            "cx": pupil_ellipse["ellipse_center_x"],
+                            "cy": pupil_ellipse["ellipse_center_y"],
+                            "radius": np.sqrt(pupil_ellipse["short_axis"] * pupil_ellipse["long_axis"]) / 2.0,
+                            "color": "lime",
+                            "linestyle": "--",
+                        },
+                        {
+                            "label": "二阶矩",
+                            "cx": pupil_features["center_x"],
+                            "cy": pupil_features["center_y"],
+                            "radius": _r2m,
+                            "color": "orange",
+                            "linestyle": ":",
+                        },
+                    ]
+                    if manual_center_x is not None and manual_center_y is not None and manual_radius is not None:
+                        _shape_boundaries.append({
+                            "label": f"手动({manual_center_x:.0f},{manual_center_y:.0f})",
+                            "cx": manual_center_x,
+                            "cy": manual_center_y,
+                            "radius": manual_radius,
+                            "color": "red",
+                            "linestyle": "-",
+                        })
+                    _border_ok = not any(np.isnan(v) for v in (
+                        pupil_border["border_x"], pupil_border["border_y"], pupil_border["border_radius"]))
+                    if _border_ok:
+                        _fig = plot_beam_visualization(pupil_img, "Pupil", _pixel_size_um, pupil_features)
+                        for _b in _shape_boundaries:
+                            _fig.axes[0].add_patch(
+                                Circle((_b["cx"], _b["cy"]), radius=_b["radius"],
+                                       fill=False, color=_b["color"], linewidth=1.5, linestyle=_b["linestyle"],
+                                       label=f"{_b['label']} (c=({_b['cx']:.0f},{_b['cy']:.0f}), r={_b['radius']:.1f}px)"))
+                        _fig.axes[0].legend(loc="upper right", fontsize=8)
+                        st.pyplot(_fig)
+                    else:
+                        st.warning("⚠️ 包围圆检测失败，无法绘制边界对比图。")
                 else:
                     st.warning("⚠️ 椭圆拟合失败，无法提取参数。")
 
@@ -691,24 +652,90 @@ def main():
                     else:
                         st.warning(f"⚠️ FTL 拟合失败: {pupil_ftl_result['message']}")
 
-                # 均匀度分析
+                # ===== 计算所有可用边界类型（用于可视化对比） =====
+                all_boundaries: list[dict] = []
+
+                # 1. 包围圆 — 始终可用
+                all_boundaries.append({
+                    "label": "包围圆",
+                    "cx": pupil_border["border_x"],
+                    "cy": pupil_border["border_y"],
+                    "radius": pupil_border["border_radius"],
+                    "color": "yellow",
+                    "linestyle": "-.",
+                })
+
+                # 2. 椭圆 — 始终可计算
+                try:
+                    energy_border = find_spot_border_energy(pupil_denoise, edge_method="ellipse")
+                    all_boundaries.append({
+                        "label": "椭圆",
+                        "cx": energy_border["border_x"],
+                        "cy": energy_border["border_y"],
+                        "radius": energy_border["border_radius"],
+                        "color": "lime",
+                        "linestyle": "--",
+                    })
+                except Exception:
+                    pass
+
+                # 3. 二阶矩半径 — 始终可计算
+                pixel_size_um_pupil = pupil_pixel * 1e6
+                radius_2m = pupil_features["avg_diameter"] / pixel_size_um_pupil / 2.0
+                all_boundaries.append({
+                    "label": "二阶矩",
+                    "cx": pupil_features["center_x"],
+                    "cy": pupil_features["center_y"],
+                    "radius": radius_2m,
+                    "color": "orange",
+                    "linestyle": ":",
+                })
+
+                # 4. FTL 特征半径 — 仅平顶光模式且拟合成功
+                if pupil_type == "平顶光 (Flat-Top)" and pupil_ftl_result is not None and pupil_ftl_result.get("success"):
+                    all_boundaries.append({
+                        "label": "FTL",
+                        "cx": pupil_features["center_x"],
+                        "cy": pupil_features["center_y"],
+                        "radius": pupil_ftl_result["R_FL_pixels"],
+                        "color": "magenta",
+                        "linestyle": "-",
+                    })
+
+                # 5. 手动输入 — 仅用户提供了有效值
+                if manual_center_x is not None and manual_center_y is not None and manual_radius is not None:
+                    all_boundaries.append({
+                        "label": f"手动({manual_center_x:.0f},{manual_center_y:.0f})",
+                        "cx": manual_center_x,
+                        "cy": manual_center_y,
+                        "radius": manual_radius,
+                        "color": "red",
+                        "linestyle": "-",
+                    })
+
+                # ===== 根据所选边界类型设置 uniformity_border =====
                 uniformity_border = dict(pupil_border)
                 if pupil_type == "平顶光 (Flat-Top)":
                     if uniformity_boundary_type == "包围椭圆 (Ellipse)":
-                        energy_border = find_spot_border_energy(
-                            pupil_denoise, edge_method='ellipse'
-                        )
-                        uniformity_border["border_radius"] = energy_border["border_radius"]
-                        uniformity_border["eccentricity"] = energy_border.get("eccentricity")
+                        eb = next((b for b in all_boundaries if b["label"] == "椭圆"), None)
+                        if eb is not None:
+                            uniformity_border["border_radius"] = eb["radius"]
                     elif uniformity_boundary_type == "FTL 特征半径":
-                        if pupil_ftl_result is not None and pupil_ftl_result.get("success"):
-                            uniformity_border["border_radius"] = pupil_ftl_result["R_FL_pixels"]
+                        eb = next((b for b in all_boundaries if b["label"] == "FTL"), None)
+                        if eb is not None:
+                            uniformity_border["border_radius"] = eb["radius"]
                         else:
                             st.warning("⚠️ FTL 拟合未成功，均匀度边界回退到包围圆半径")
                     elif uniformity_boundary_type == "二阶矩半径 (2nd moment)":
-                        pixel_size_um = pupil_pixel * 1e6
-                        radius_2m = pupil_features["avg_diameter"] / pixel_size_um / 2.0
-                        uniformity_border["border_radius"] = radius_2m
+                        eb = next((b for b in all_boundaries if b["label"] == "二阶矩"), None)
+                        if eb is not None:
+                            uniformity_border["border_radius"] = eb["radius"]
+                    elif uniformity_boundary_type == "手动输入 (Manual)":
+                        eb = next((b for b in all_boundaries if b["label"].startswith("手动")), None)
+                        if eb is not None:
+                            uniformity_border["border_radius"] = eb["radius"]
+                            uniformity_border["border_x"] = eb["cx"]
+                            uniformity_border["border_y"] = eb["cy"]
 
                 uniformity_pupil, pupil_cross_section = _render_pupil_type_analysis(
                     pupil_denoise, pupil_features, uniformity_border,
@@ -722,50 +749,9 @@ def main():
                 if uniformity_pupil is not None:
                     st.caption(
                         f"边界: {uniformity_boundary_type}"
+                        f" | 圆心: ({uniformity_pupil['cx']:.1f}, {uniformity_pupil['cy']:.1f})"
                         f" | 半径: {uniformity_pupil['radius']:.2f} px"
-                        f" | RMS: {uniformity_pupil['rms_uniformity']:.4f}"
-                        f" | γ: {uniformity_pupil['energy_uniformity']:.4f}"
-                        f" | P-V: {uniformity_pupil['pv']:.4f}"
                     )
-
-                pupil_border_valid = not (
-                    np.isnan(pupil_border["border_x"])
-                    or np.isnan(pupil_border["border_y"])
-                    or np.isnan(pupil_border["border_radius"])
-                )
-
-                if pupil_border_valid:
-                    pupil_fig = plot_beam_visualization(
-                        pupil_img, "Pupil", pupil_pixel * 1e6, pupil_features
-                    )
-                    cx, cy = pupil_border["border_x"], pupil_border["border_y"]
-                    pupil_fig.axes[0].add_patch(
-                        Circle(
-                            (cx, cy),
-                            pupil_border["border_radius"],
-                            fill=False,
-                            color="yellow",
-                            linewidth=2,
-                            linestyle="-.",
-                            label=f"包围圆 (r={pupil_border['border_radius']:.1f}px)",
-                        )
-                    )
-                    if uniformity_boundary_type != "包围圆 (Enclosing circle)":
-                        pupil_fig.axes[0].add_patch(
-                            Circle(
-                                (cx, cy),
-                                uniformity_border["border_radius"],
-                                fill=False,
-                                color="magenta",
-                                linewidth=2,
-                                linestyle="-",
-                                label=f"均匀度边界 (r={uniformity_border['border_radius']:.1f}px)",
-                            )
-                        )
-                    pupil_fig.axes[0].legend(loc="upper right", fontsize=8)
-                    st.pyplot(pupil_fig)
-                else:
-                    st.warning("⚠️ 包围圆检测失败，请检查图像。")
 
                 if pupil_type == "平顶光 (Flat-Top)" and pupil_ftl_result is not None:
                     if ftl_n_angles > 0 and pupil_ftl_result.get("angular_R_FL_pixels"):
@@ -817,46 +803,16 @@ def main():
                                           f"{np.nanmax(valid_q):.2f}" if len(valid_q) > 0 else "N/A",
                                           help="q(θ) 最大值，对应光斑边缘最陡峭（最接近理想平顶）的方向。")
 
-                            fig_polar, ax_polar = plt.subplots(figsize=(6, 6), subplot_kw={"projection": "polar"})
-                            cmap_val = (ang_theta_arr % (2 * np.pi)) / (2 * np.pi)
-                            scatter = ax_polar.scatter(
-                                ang_theta_arr, ang_rfl_arr * _unit_factor,
-                                c=cmap_val, cmap="hsv", s=40, alpha=0.8
-                            )
-                            ax_polar.set_theta_zero_location("E")
-                            ax_polar.set_theta_direction(-1)
-                            plt.tight_layout()
-                            st.markdown(f"**R_FL(θ) 极坐标图** (n={ftl_n_angles}) :gray[各角度 FTL 特征半径的极坐标分布，半径轴表示 R_FL 大小，颜色映射标识不同角度方向，用于判断光斑各向异性。]")
-                            st.pyplot(fig_polar)
-
-                            fig_ang, ax_ang = plt.subplots(figsize=(8, 3.5))
-                            ax_ang.plot(ang_theta, ang_rfl_arr * _unit_factor, "o-",
-                                        color="steelblue", markersize=4, linewidth=1.2)
-                            ax_ang.set_xlabel("角度 (°)")
-                            ax_ang.set_ylabel(f"R_FL ({_unit_label})")
-                            ax_ang.grid(True, alpha=0.3)
-                            mean_rfl = np.nanmean(valid_rfl) * _unit_factor
-                            ax_ang.axhline(mean_rfl, color="gray", linestyle="--", alpha=0.6,
-                                          label=f"均值={mean_rfl:.2f}")
-                            ax_ang.legend(fontsize=8)
-                            plt.tight_layout()
-                            st.markdown("**FTL 特征半径角向分布** :gray[R_FL(θ) 随角度变化的折线图，灰色虚线为角向均值。曲线平坦表示近圆对称，波动越大各向异性越显著。]")
-                            st.pyplot(fig_ang)
-
-                            if len(valid_q) > 0:
-                                fig_q, ax_q = plt.subplots(figsize=(6, 6), subplot_kw={"projection": "polar"})
-                                ax_q.plot(ang_theta_arr, ang_q_arr, "o-",
-                                          color="darkorange", markersize=4, linewidth=1.2)
-                                ax_q.set_theta_zero_location("E")
-                                ax_q.set_theta_direction(-1)
-                                mean_q = np.nanmean(ang_q_arr)
-                                ax_q.plot(ang_theta_arr, np.full_like(ang_q_arr, mean_q),
-                                          color="gray", linestyle="--", alpha=0.6, linewidth=1,
-                                          label=f"均值={mean_q:.2f}")
-                                ax_q.legend(fontsize=8, loc="upper right")
-                                plt.tight_layout()
-                                st.markdown("**FTL 平顶阶数 q(θ) 极坐标图** :gray[各角度平顶阶数的极坐标分布，半径表示 q 值，灰色虚线为角向均值。q → ∞ 理想平顶，q ≈ 2 洛伦兹线型。]")
-                                st.pyplot(fig_q)
+                            col_polar1, col_polar2 = st.columns(2)
+                            with col_polar1:
+                                st.markdown(f"**R_FL(θ) 极坐标图** (n={ftl_n_angles}) :gray[R_FL(θ) 为各角度方向 FTL 拟合的特征半径，反映光斑的径向尺度在各方向上的分布。半径轴大小表示该方向光斑延伸范围，图形越接近正圆表示光斑越圆对称；半径波动越大说明各向异性越显著，椭圆拉伸方向对应半径极大值方向。]")
+                                st.pyplot(
+                                    plot_ftl_polar(ang_theta_arr, ang_rfl_arr * _unit_factor, _unit_label)
+                                )
+                            with col_polar2:
+                                if len(valid_q) > 0:
+                                    st.markdown("**FTL 平顶阶数 q(θ) 极坐标图** :gray[q(θ) 控制 FTL 模型边缘滚降的陡峭程度（阶数），q → ∞ 为理想平顶（阶跃边缘），q ≈ 2 为洛伦兹型（缓变边缘）。q 越大边缘越陡、顶部越平坦。各向异性越显著，q(θ) 的角向波动越大。]")
+                                    st.pyplot(plot_ftl_q_polar(ang_theta_arr, ang_q_arr))
 
                 if has_axis and has_pupil:
                     st.subheader("四、光束质量 — BPP & M²")
@@ -899,12 +855,12 @@ def main():
                         f"{axis_features['D_y'] * _unit_factor:.2f} {_unit_label}",
                         help="基于 Y 方向二阶矩的 D4σ 直径（ISO 11146），反映焦斑 Y 向尺寸。",
                     )
+                with col_a2:
                     st.metric(
                         "D4σ 平均直径",
                         f"{axis_features['avg_diameter'] * _unit_factor:.2f} {_unit_label}",
                         help="D4σ X 与 D4σ Y 的几何平均，近似圆对称焦斑等效口径。",
                     )
-                with col_a2:
                     st.metric(
                         "中心强度",
                         f"{axis_features['center_intensity']:.2f}",
@@ -1016,28 +972,12 @@ def main():
                     zernike_noll = zernike_result["noll_map"]
 
                     col_z1, col_z2 = st.columns([2, 1])
+                    sorted_indices = np.argsort(np.abs(zernike_coeffs))[::-1]
+                    top_k = min(10, len(sorted_indices))
+                    top_idx = sorted_indices[:top_k]
                     with col_z1:
                         st.caption("各阶 Zernike 系数条形图（按 |系数| 降序）")
-                        sorted_indices = np.argsort(np.abs(zernike_coeffs))[::-1]
-                        top_k = min(10, len(sorted_indices))
-                        top_idx = sorted_indices[:top_k]
-                        top_coeffs = zernike_coeffs[top_idx]
-                        top_noll = [zernike_noll[i] for i in top_idx]
-
-                        labels = [f"Noll {n}" for n in top_noll]
-                        colors = ["steelblue" if c >= 0 else "crimson" for c in top_coeffs]
-
-                        fig_bar, ax_bar = plt.subplots(figsize=(8, 4))
-                        y_pos = np.arange(len(labels))
-                        ax_bar.barh(y_pos, top_coeffs, color=colors)
-                        ax_bar.set_yticks(y_pos)
-                        ax_bar.set_yticklabels(labels)
-                        ax_bar.invert_yaxis()
-                        ax_bar.set_xlabel("系数值")
-                        ax_bar.set_title(f"Top {top_k} Zernike 系数")
-                        ax_bar.axvline(0, color="gray", linewidth=0.8)
-                        ax_bar.grid(axis="x", alpha=0.3)
-                        plt.tight_layout()
+                        fig_bar = plot_zernike_barchart(zernike_coeffs, zernike_noll, top_k=10)
                         st.pyplot(fig_bar)
 
                     with col_z2:
@@ -1121,6 +1061,9 @@ def main():
                     ]
                 if uniformity_pupil is not None:
                     results["参数"] += [
+                        "均匀度边界类型",
+                        "均匀度边界圆心 X (px)",
+                        "均匀度边界圆心 Y (px)",
                         "均匀度边界半径 (px)",
                         "RMS 非均匀度",
                         "能量均匀度 γ",
@@ -1128,6 +1071,9 @@ def main():
                         "圆内均值",
                     ]
                     results["值"] += [
+                        uniformity_boundary_type,
+                        f"{uniformity_pupil['cx']:.1f}",
+                        f"{uniformity_pupil['cy']:.1f}",
                         f"{uniformity_pupil['radius']:.2f}",
                         f"{uniformity_pupil['rms_uniformity']:.4f}",
                         f"{uniformity_pupil['energy_uniformity']:.4f}",

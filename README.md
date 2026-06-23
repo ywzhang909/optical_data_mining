@@ -130,7 +130,8 @@ streamlit run streamlit_app.py
 │       ├── zernike_analysis.py   # Zernike 波前分解
 │       └── visualization/
 │           ├── __init__.py
-│           └── beam_visualization.py  # Plotly 3D 可视化
+│           ├── beam_visualization.py  # Plotly 3D / beam 可视化
+│           └── renderers.py           # matplotlib 渲染工具包（纯绘图函数）
 ├── requirements.txt              # Python 依赖
 ├── .streamlit/
 │   └── config.toml               # Streamlit Cloud 配置
@@ -147,7 +148,8 @@ streamlit run streamlit_app.py
 | **图像工具** | `optical_analysis/image_utils.py` | read_image_to_numpy, subtract_dark_field, find_spot_border, ellipse_fit |
 | **波前分析** | `optical_analysis/zernike_analysis.py` | fit_zernike, zernike_order_label |
 | **均匀度** | `optical_analysis/uniform_analysis.py` | calculate_uniformity_metrics, plot_uniformity_analysis |
-| **可视化** | `streamlit_app.py`(内建) | 3D Plotly 表面图、D4σ圆、XY截面、极坐标图 |
+| **可视化** | `visualization/beam_visualization.py` | Plotly 3D 表面图、交互式 Beam 图 |
+| **渲染器** | `visualization/renderers.py` | matplotlib 纯绘图函数（D4σ圆、高斯拟合、FTL极坐标、Zernike柱状图） |
 
 ---
 
@@ -177,9 +179,11 @@ from .new_analysis import my_metric
 
 ### 修改前端界面
 
-- `streamlit_app.py` 中的 `main()` 函数控制所有 UI 布局
+- `streamlit_app.py` 中的 `main()` 函数控制所有 UI 布局和交互逻辑
 - 使用 Streamlit 原生组件：`st.columns`, `st.metric`, `st.pyplot`, `st.plotly_chart`
 - 图表绘制使用 `matplotlib`（静态图）和 `plotly`（交互式 3D）
+- **渲染分离**：所有绘图函数放在 `visualization/renderers.py` 中（纯 matplotlib，不含 Streamlit 调用），`streamlit_app.py` 只负责调用并显示
+- Plotly 交互式可视化位于 `visualization/beam_visualization.py`
 - 侧边栏参数通过 `st.sidebar` 管理
 
 ### 部署自定义版本

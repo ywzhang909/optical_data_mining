@@ -21,6 +21,16 @@
     - history_manager: 历史记录管理
 """
 
+# 联合分析模块（光瞳+光轴联合分析）
+from .joint_analysis import (
+    robust_pupil_preprocessing,
+    calculate_energy_confinement_radius,
+    calculate_roundness,
+    calculate_pupil_beam_metrics,
+    tie_phase_retrieval,
+    zernike_fit_phase,
+)
+
 # 光束分析模块
 from .beam_analysis import (
     calculate_bpp,
@@ -82,6 +92,13 @@ from .visualization.beam_visualization import (
 )
 
 __all__ = [
+    # joint_analysis
+    "robust_pupil_preprocessing",
+    "calculate_energy_confinement_radius",
+    "calculate_roundness",
+    "calculate_pupil_beam_metrics",
+    "tie_phase_retrieval",
+    "zernike_fit_phase",
     # beam_analysis
     "gaussian",
     "fitting_gaussian",

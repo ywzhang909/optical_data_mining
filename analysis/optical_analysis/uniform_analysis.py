@@ -69,6 +69,7 @@ def calculate_uniformity_metrics(
             "std_intensity": np.nan,
             "rms_uniformity": np.nan,
             "pv": np.nan,
+            "energy_uniformity": np.nan,
             "flat_top_fit_x": None,
             "flat_top_fit_y": None,
             "profile_x": None,
@@ -86,9 +87,12 @@ def calculate_uniformity_metrics(
     if mean_intensity not in (0, np.nan):
         rms_uniformity = std_intensity / mean_intensity
         pv = (float(np.max(values)) - float(np.min(values))) / mean_intensity
+        # 能量均匀度 γ = 1 - RMS / mean  (基于论文定义)
+        energy_uniformity = 1.0 - std_intensity / mean_intensity
     else:
         rms_uniformity = np.nan
         pv = np.nan
+        energy_uniformity = np.nan
 
     profile_x = img[int(round(cy)), :]
     profile_y = img[:, int(round(cx))]
@@ -104,6 +108,7 @@ def calculate_uniformity_metrics(
         "std_intensity": std_intensity,
         "rms_uniformity": rms_uniformity,
         "pv": pv,
+        "energy_uniformity": energy_uniformity,
         "flat_top_fit_x": flat_top_fit_x,
         "flat_top_fit_y": flat_top_fit_y,
         "profile_x": profile_x,

@@ -306,14 +306,17 @@ def _render_pupil_type_analysis(
         # === 均匀度分析（平顶光） ===
         st.subheader("光瞳均匀度分析")
         uniformity = calculate_uniformity_metrics(pupil_denoise, pupil_border)
-        col_u1, col_u2, col_u3 = st.columns(3)
+        col_u1, col_u2, col_u3, col_u4 = st.columns(4)
         with col_u1:
             st.metric("RMS 非均匀度", f"{uniformity['rms_uniformity']:.4f}",
                       help="圆内光强的 RMS 非均匀度 = std / mean。值越接近 0，光斑越均匀。")
         with col_u2:
+            st.metric("能量均匀度 γ", f"{uniformity['energy_uniformity']:.4f}",
+                      help="γ = 1 − RMSE/mean。越接近 1 表示能量分布越均匀（参考：>0.95 为优）。")
+        with col_u3:
             st.metric("峰谷非均匀度 (P-V)", f"{uniformity['pv']:.4f}",
                       help="峰谷非均匀度 = (max - min) / mean。值越小，说明光斑强度分布越平坦。")
-        with col_u3:
+        with col_u4:
             st.metric("圆内均值", f"{uniformity['mean_intensity']:.2f}",
                       help="包围圆内部所有像素的强度算术平均。反映该区域的平均光强能级。")
 
@@ -721,6 +724,7 @@ def main():
                         f"边界: {uniformity_boundary_type}"
                         f" | 半径: {uniformity_pupil['radius']:.2f} px"
                         f" | RMS: {uniformity_pupil['rms_uniformity']:.4f}"
+                        f" | γ: {uniformity_pupil['energy_uniformity']:.4f}"
                         f" | P-V: {uniformity_pupil['pv']:.4f}"
                     )
 
@@ -1119,12 +1123,14 @@ def main():
                     results["参数"] += [
                         "均匀度边界半径 (px)",
                         "RMS 非均匀度",
+                        "能量均匀度 γ",
                         "峰谷非均匀度",
                         "圆内均值",
                     ]
                     results["值"] += [
                         f"{uniformity_pupil['radius']:.2f}",
                         f"{uniformity_pupil['rms_uniformity']:.4f}",
+                        f"{uniformity_pupil['energy_uniformity']:.4f}",
                         f"{uniformity_pupil['pv']:.4f}",
                         f"{uniformity_pupil['mean_intensity']:.2f}",
                     ]

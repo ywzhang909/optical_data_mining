@@ -46,7 +46,7 @@ UV*配置*说明*
 
 # Legacy directories (not part of streamlit-cloud deployment)
 src/
-docs/
+docs\zernike fit near spot*
 notebooks/
 tests/
 ui/

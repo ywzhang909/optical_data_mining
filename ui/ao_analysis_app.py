@@ -10,7 +10,11 @@ AO光束质量分析Streamlit应用
 - FFT居中处理
 - 斯特列尔比(Strehl Ratio)计算（axis + pupil）
 - BPP (Beam Parameter Product) 计算（axis + pupil）
-- 包围圆计算与可视化（仅pupil）
+- 包围圆/椭圆计算与可视化（仅pupil）
+- FTL (Flat-Topped Lorentz) 拟合（仅pupil 平顶光）
+- 椭圆拟合（离心率、长短轴、倾角）
+- Zernike 波前像差分解（可配置阶数）
+- 光瞳类型自适应包围圆/椭圆/FTL/D4σ 均匀度边界
 """
 
 import sys
@@ -42,7 +46,7 @@ from analysis.optical_analysis import (  # noqa: E402
     shift_to_center_fft,
     subtract_dark_field,
 )
-from analysis.optical_analysis.image_utils import find_spot_border  # noqa: E402
+from analysis.optical_analysis.image_utils import find_spot_border, find_spot_border_energy, ellipse_fit  # noqa: E402
 from analysis.optical_analysis.uniform_analysis import (  # noqa: E402
     calculate_uniformity_metrics,
     plot_uniformity_analysis,
@@ -227,39 +231,6 @@ def plot_3d_visualization(img, title, zmin=None, zmax=None):
     return plotly_fig
 
 
-def _render_ftl_radial_plot(ftl_result, unit_factor, unit_label):
-    """
-    绘制 FTL 径向拟合图（side-effect: st.pyplot）。
-
-    Args:
-        ftl_result: fit_flat_topped_lorentz() 返回的字典，需包含 success=True
-        unit_factor: 显示单位转换因子
-        unit_label: 显示单位标签
-    """
-    if not ftl_result.get("success"):
-        return
-    fig_ftl, ax_ftl = plt.subplots(figsize=(8, 5))
-    r_data = ftl_result["radial_R"]
-    i_data = ftl_result["radial_intensity"]
-    i_fit = ftl_result["fitted_intensity"]
-
-    fit_len = len(i_fit)
-    ax_ftl.scatter(r_data[:fit_len], i_data[:fit_len], s=8, color="blue", alpha=0.5, label="径向平均强度")
-    ax_ftl.plot(r_data[:fit_len], i_fit, "r-", linewidth=2, label="FTL 拟合")
-
-    R_FL_val = ftl_result["R_FL"]
-    q_val = ftl_result["q"]
-    ax_ftl.axvline(R_FL_val, color="green", linestyle="--", alpha=0.7,
-                   label=f"R_FL = {R_FL_val * unit_factor:.2f} {unit_label}")
-    ax_ftl.set_xlabel(f"径向距离 ({unit_label})")
-    ax_ftl.set_ylabel("强度")
-    ax_ftl.set_title(f"FTL 径向拟合 (q={q_val:.2f})")
-    ax_ftl.legend(fontsize=8)
-    ax_ftl.grid(True, alpha=0.3)
-    plt.tight_layout()
-    st.pyplot(fig_ftl)
-
-
 def _render_pupil_type_analysis(
     pupil_denoise, pupil_features, pupil_border,
     pupil_type, pupil_img, pupil_pixel, border_valid,
@@ -268,7 +239,7 @@ def _render_pupil_type_analysis(
     根据光瞳类型渲染分析结果。
 
     高斯光 → 光瞳截面高斯拟合（展示截面和拟合高斯曲线、束腰位置与值）
-    平顶光 → 均匀度分析（RMS Uniformity, P-V, 圆内均值）
+    平顶光 → 均匀度分析（RMS 非均匀度、峰谷非均匀度、圆内均值）
 
     Returns:
         tuple: (uniformity_pupil, pupil_cross_section)
@@ -343,14 +314,14 @@ def _render_pupil_type_analysis(
             pupil_cross_section = {"success": False}
     else:
         # === 均匀度分析（平顶光） ===
-        st.subheader("Uniformity Analysis - Pupil")
+        st.subheader("光瞳均匀度分析")
         uniformity = calculate_uniformity_metrics(pupil_denoise, pupil_border)
         col_u1, col_u2, col_u3 = st.columns(3)
         with col_u1:
-            st.metric("RMS Uniformity", f"{uniformity['rms_uniformity']:.4f}",
+            st.metric("RMS 非均匀度", f"{uniformity['rms_uniformity']:.4f}",
                       help="圆内光强的 RMS 非均匀度 = std / mean。值越接近 0，光斑越均匀。")
         with col_u2:
-            st.metric("P-V", f"{uniformity['pv']:.4f}",
+            st.metric("峰谷非均匀度 (P-V)", f"{uniformity['pv']:.4f}",
                       help="峰谷非均匀度 = (max - min) / mean。值越小，说明光斑强度分布越平坦。")
         with col_u3:
             st.metric("圆内均值", f"{uniformity['mean_intensity']:.2f}",
@@ -431,6 +402,26 @@ def main():
         "高斯光使用高斯函数拟合 X/Y 截面并计算半腰。",
     )
 
+    # 均匀度计算边界
+    st.sidebar.subheader("📐 均匀度边界")
+    uniformity_boundary_type = st.sidebar.radio(
+        "边界类型",
+        ["包围圆 (Enclosing circle)", "包围椭圆 (Ellipse)", "FTL 特征半径", "二阶矩半径 (2nd moment)"],
+        index=0,
+        help="计算平顶光均匀度时，光斑区域的边界选取方式。仅在平顶光模式下生效。",
+    )
+
+    # FTL 角度采样
+    st.sidebar.subheader("🔦 FTL 角度采样")
+    ftl_n_angles = st.sidebar.slider(
+        "FTL 角度采样数",
+        min_value=0,
+        max_value=72,
+        value=36,
+        step=4,
+        help="沿光瞳圆心逐角度采样并拟合 FTL。0 表示仅用角向平均（向后兼容）。增大可探测非对称性。",
+    )
+
     # 显示单位
     display_unit = st.sidebar.selectbox(
         "显示单位",
@@ -462,12 +453,23 @@ def main():
         help="系统入瞳口径。用于 PIB 占比的理论孔径归一化。",
     )
 
-    st.header("File Upload")
+    # Zernike 分解参数
+    st.sidebar.subheader("🔭 Zernike 波前分析")
+    max_zernike_order = st.sidebar.slider(
+        "Zernike 最大阶数",
+        min_value=4,
+        max_value=10,
+        value=6,
+        step=1,
+        help="Zernike 多项式最大径向阶数 n。阶数越高，可拟合的像差模式越多，但需要更大的采样孔径。",
+    )
+
+    st.header("📁 文件上传")
 
     col1, col2 = st.columns(2)
 
     with col1:
-        st.subheader("Axis Image (Axis)")
+        st.subheader("光轴图片 (Axis)")
         axis_file = st.file_uploader(
             "上传光轴相机图片",
             type=["tiff", "tif", "png", "jpg", "jpeg"],
@@ -475,7 +477,7 @@ def main():
         )
 
     with col2:
-        st.subheader("Pupil Image (Pupil)")
+        st.subheader("光瞳图片 (Pupil)")
         pupil_file = st.file_uploader(
             "上传光瞳相机图片",
             type=["tiff", "tif", "png", "jpg", "jpeg"],
@@ -520,11 +522,13 @@ def main():
             st.info("📌 计算范围提示\n" + "\n".join(notes))
 
         if st.button("🚀 开始计算", type="primary", width="stretch"):
+            zernike_result = None
             if has_axis:
                 axis_img = read_image_to_numpy(axis_file)
                 axis_denoise, axis_black = subtract_dark_field(
                     axis_img, denoise_method, manual_threshold
                 )
+                axis_features = d4sigma(axis_denoise, axis_pixel * 1e6)
 
             if has_pupil:
                 pupil_img = read_image_to_numpy(pupil_file)
@@ -532,74 +536,95 @@ def main():
                     pupil_img, denoise_method, manual_threshold
                 )
 
+            st.header("💡 三维光强分布 — 3D Intensity Surface")
+            imgs_to_plot = []
             if has_axis:
-                st.header("Image Preprocessing - Axis")
-                st.image(axis_img, caption="光轴原始图像", width=600)
+                imgs_to_plot.append((axis_denoise, "光轴 (Axis)"))
+            if has_pupil:
+                imgs_to_plot.append((pupil_denoise, "光瞳 (Pupil)"))
+
+            if imgs_to_plot:
+                if len(imgs_to_plot) == 1:
+                    fig3d = plot_3d_visualization(imgs_to_plot[0][0], imgs_to_plot[0][1])
+                    st.plotly_chart(fig3d, width='stretch')
+                else:
+                    cols3d = st.columns(len(imgs_to_plot))
+                    for col, (img_data, title) in zip(cols3d, imgs_to_plot):
+                        with col:
+                            fig3d = plot_3d_visualization(img_data, title)
+                            st.plotly_chart(fig3d, width='stretch')
 
             if has_pupil:
-                st.header("Image Preprocessing - Pupil")
-                st.image(pupil_img, caption="光瞳原始图像", width=600)
-
-            if has_axis:
-                st.header("D4σ Feature Extraction - Axis")
-                axis_features = d4sigma(axis_denoise, axis_pixel * 1e6)
-                col_a1, col_a2 = st.columns(2)
-                with col_a1:
-                    st.metric("光轴 D4σ X", f"{axis_features['D_x'] * _unit_factor:.2f} {_unit_label}")
-                    st.metric("光轴 D4σ Y", f"{axis_features['D_y'] * _unit_factor:.2f} {_unit_label}")
-                    st.metric(
-                        "光轴 平均直径", f"{axis_features['avg_diameter'] * _unit_factor:.2f} {_unit_label}"
-                    )
-                with col_a2:
-                    st.metric(
-                        "光轴 中心强度", f"{axis_features['center_intensity']:.2f}"
-                    )
-
-                axis_fig = plot_beam_visualization(
-                    axis_img, "Axis", axis_pixel * 1e6, axis_features
-                )
-                st.pyplot(axis_fig)
-
-            if has_pupil:
-                st.header("D4σ Feature Extraction - Pupil")
                 pupil_features = d4sigma(pupil_denoise, pupil_pixel * 1e6)
+                pupil_border = find_spot_border(pupil_denoise)
                 col_p1, col_p2 = st.columns(2)
                 with col_p1:
                     st.metric(
-                        "光瞳 D4σ X",
+                        "D4σ X 直径",
                         f"{pupil_features['D_x'] * _unit_factor:.2f} {_unit_label}",
-                        help="基于 X 方向二阶矩计算的 D4σ 直径（ISO 11146 约定），反映光斑在 X 方向的展宽。",
+                        help="基于 X 方向二阶矩的 D4σ 直径（ISO 11146 约定）。",
                     )
                     st.metric(
-                        "光瞳 D4σ Y",
+                        "D4σ Y 直径",
                         f"{pupil_features['D_y'] * _unit_factor:.2f} {_unit_label}",
-                        help="基于 Y 方向二阶矩计算的 D4σ 直径，反映光斑在 Y 方向的展宽。",
+                        help="基于 Y 方向二阶矩的 D4σ 直径。",
                     )
                     st.metric(
-                        "光瞳 平均直径",
+                        "D4σ 平均直径",
                         f"{pupil_features['avg_diameter'] * _unit_factor:.2f} {_unit_label}",
-                        help="D4σ X 与 D4σ Y 的算术平均，用于近似圆对称光斑的口径估计。",
+                        help="D4σ X 与 D4σ Y 的几何平均，近似圆对称光斑口径。",
                     )
                 with col_p2:
                     st.metric(
-                        "光瞳 中心强度",
+                        "中心强度",
                         f"{pupil_features['center_intensity']:.2f}",
-                        help="光斑中心（质心处）的像素强度值，用于评估信号强度和是否存在饱和/欠曝。",
+                        help="质心处像素强度，评估信号强度和饱和/欠曝情况。",
                     )
-                    pupil_border = find_spot_border(pupil_denoise)
                     st.metric(
                         "包围圆半径",
-                        f"{pupil_border['border_radius']:.2f} pixel",
-                        help="minEnclosingCircle 拟合出的包围光斑的最小圆半径（像素）。",
+                        f"{pupil_border['border_radius']:.2f} px",
+                        help="minEnclosingCircle 拟合出的包围光斑最小圆半径。",
                     )
                     st.metric(
                         "包围圆直径",
-                        f"{pupil_border['border_radius'] * 2:.2f} pixel",
-                        help="包围圆直径 = 2 × 半径，用于估算光斑口径。",
+                        f"{pupil_border['border_radius'] * 2:.2f} px",
+                        help="包围圆直径 = 2×半径。",
+                    )
+                    st.metric(
+                        "离心率",
+                        f"{pupil_border['eccentricity']:.4f}",
+                        help="椭圆离心率（0=正圆，越接近1越扁）。",
+                    )
+                    st.metric(
+                        "置信度",
+                        f"{pupil_border['confidence']:.4f}",
+                        help="轮廓与圆拟合置信度（0-1），越高越接近规则圆形。",
                     )
 
-                # ===== 光瞳类型拟合 =====
-                st.subheader("🔦 光瞳类型拟合")
+                # ===== 二、形状分析：椭圆拟合 =====
+                st.subheader("二、形状分析 — 椭圆拟合")
+                pupil_uint8 = (pupil_denoise - pupil_denoise.min()) / (pupil_denoise.max() - pupil_denoise.min()) * 255
+                pupil_uint8 = pupil_uint8.astype(np.uint8)
+                pupil_ellipse = ellipse_fit(pupil_uint8)
+                if not np.isnan(pupil_ellipse.get("ellipticity", np.nan)):
+                    col_e1, col_e2, col_e3, col_e4 = st.columns(4)
+                    with col_e1:
+                        st.metric("短轴", f"{pupil_ellipse['short_axis']:.2f} px")
+                    with col_e2:
+                        st.metric("长轴", f"{pupil_ellipse['long_axis']:.2f} px")
+                    with col_e3:
+                        st.metric("椭圆度", f"{pupil_ellipse['ellipticity']:.4f}",
+                                  help="长轴/短轴比值，越接近 1 越圆。")
+                    with col_e4:
+                        st.metric("倾角", f"{pupil_ellipse['angle']:.1f}°",
+                                  help="椭圆主轴相对水平方向的旋转角度。")
+                    st.metric("椭圆内均匀度", f"{pupil_ellipse['uniformity']:.4f}",
+                              help="椭圆轮廓内 std/mean，越小越均匀。")
+                else:
+                    st.warning("⚠️ 椭圆拟合失败，无法提取参数。")
+
+                # ===== 三、强度分布：光瞳类型拟合 + 均匀度 =====
+                st.subheader("三、强度分布 — 光瞳类型拟合与均匀度")
                 pupil_ftl_result = None
                 pupil_gaussian_result = None
                 pupil_cross_section = None
@@ -613,22 +638,23 @@ def main():
                     col_gp1, col_gp2 = st.columns(2)
                     with col_gp1:
                         st.metric(
-                            "光瞳 高斯半腰 X",
+                            "高斯半腰 X",
                             f"{pupil_gaussian_result['gaussian_dia_x(um)'] * _unit_factor:.2f} {_unit_label}",
-                            help="X 方向高斯拟合的半高宽直径 (2σ)。",
+                            help="X 方向高斯拟合半高宽直径 (2σ)。",
                         )
                     with col_gp2:
                         st.metric(
-                            "光瞳 高斯半腰 Y",
+                            "高斯半腰 Y",
                             f"{pupil_gaussian_result['gaussian_dia_y(um)'] * _unit_factor:.2f} {_unit_label}",
-                            help="Y 方向高斯拟合的半高宽直径 (2σ)。",
+                            help="Y 方向高斯拟合半高宽直径 (2σ)。",
                         )
-                else:  # 平顶光 (Flat-Top)
+                else:
                     pupil_ftl_result = fit_flat_topped_lorentz(
                         pupil_denoise,
                         pupil_features["center_x"],
                         pupil_features["center_y"],
                         pixel_size=pupil_pixel * 1e6,
+                        n_angles=ftl_n_angles,
                     )
                     if pupil_ftl_result["success"]:
                         st.latex(r"I(R) = \frac{I_0}{\left[1 + (R/R_{\text{FL}})^q\right]^{1 + 2/q}}")
@@ -637,77 +663,220 @@ def main():
                             st.metric(
                                 "R_FL (特征半径)",
                                 f"{pupil_ftl_result['R_FL'] * _unit_factor:.2f} {_unit_label}",
-                                help="FTL 模型拟合的特征半径，决定光斑整体尺度。",
+                                help="FTL 拟合特征半径，决定光斑整体尺度。",
                             )
                             st.metric(
                                 "R_FL 误差",
                                 f"±{pupil_ftl_result['R_FL_error'] * _unit_factor:.2f} {_unit_label}",
-                                help="R_FL 拟合标准误差。",
                             )
                         with col_f2:
                             st.metric(
                                 "q (平顶阶数)",
                                 f"{pupil_ftl_result['q']:.2f}",
-                                help="平顶阶数 q：q→∞ 接近理想平顶，q=2 为洛伦兹线型。实际光束通常 q∈[2,20]。",
+                                help="q→∞ 接近理想平顶，q=2 为洛伦兹线型。",
                             )
                             st.metric(
                                 "q 误差",
                                 f"±{pupil_ftl_result['q_error']:.2f}",
-                                help="q 拟合标准误差。",
                             )
                         with col_f3:
                             st.metric(
                                 "拟合中心强度 I₀",
                                 f"{pupil_ftl_result['I0']:.2f}",
-                                help="FTL 模型拟合的中心峰值强度。",
                             )
                             st.metric(
-                                "R_FL / D4σ",
+                                "R_FL / D4σ 半径比",
                                 f"{pupil_ftl_result['R_FL'] / (pupil_features['avg_diameter'] / 2):.4f}",
-                                help="特征半径 R_FL 与 D4σ 半径之比，反映光斑轮廓形态。",
+                                help="特征半径与 D4σ 半半径之比，反映光斑轮廓形态。",
                             )
                     else:
                         st.warning(f"⚠️ FTL 拟合失败: {pupil_ftl_result['message']}")
 
-                pupil_fig = plot_beam_visualization(
-                    pupil_img, "Pupil", pupil_pixel * 1e6, pupil_features
+                # 均匀度分析
+                uniformity_border = dict(pupil_border)
+                if pupil_type == "平顶光 (Flat-Top)":
+                    if uniformity_boundary_type == "包围椭圆 (Ellipse)":
+                        energy_border = find_spot_border_energy(
+                            pupil_denoise, edge_method='ellipse'
+                        )
+                        uniformity_border["border_radius"] = energy_border["border_radius"]
+                        uniformity_border["eccentricity"] = energy_border.get("eccentricity")
+                    elif uniformity_boundary_type == "FTL 特征半径":
+                        if pupil_ftl_result is not None and pupil_ftl_result.get("success"):
+                            uniformity_border["border_radius"] = pupil_ftl_result["R_FL_pixels"]
+                        else:
+                            st.warning("⚠️ FTL 拟合未成功，均匀度边界回退到包围圆半径")
+                    elif uniformity_boundary_type == "二阶矩半径 (2nd moment)":
+                        pixel_size_um = pupil_pixel * 1e6
+                        radius_2m = pupil_features["avg_diameter"] / pixel_size_um / 2.0
+                        uniformity_border["border_radius"] = radius_2m
+
+                uniformity_pupil, pupil_cross_section = _render_pupil_type_analysis(
+                    pupil_denoise, pupil_features, uniformity_border,
+                    pupil_type, pupil_img, pupil_pixel,
+                    not (
+                        np.isnan(pupil_border["border_x"])
+                        or np.isnan(pupil_border["border_y"])
+                        or np.isnan(pupil_border["border_radius"])
+                    ),
                 )
-                border_valid = not (
+                if uniformity_pupil is not None:
+                    st.caption(
+                        "均匀度边界: " + uniformity_boundary_type
+                        + " | 半径 = " + f"{uniformity_pupil['radius']:.2f} px"
+                        + " | RMS = " + f"{uniformity_pupil['rms_uniformity']:.4f}"
+                        + " | P-V = " + f"{uniformity_pupil['pv']:.4f}"
+                    )
+
+                pupil_border_valid = not (
                     np.isnan(pupil_border["border_x"])
                     or np.isnan(pupil_border["border_y"])
                     or np.isnan(pupil_border["border_radius"])
                 )
-                if border_valid:
-                    cx, cy, r = (
-                        pupil_border["border_x"],
-                        pupil_border["border_y"],
-                        pupil_border["border_radius"],
+
+                if pupil_border_valid:
+                    pupil_fig = plot_beam_visualization(
+                        pupil_img, "Pupil", pupil_pixel * 1e6, pupil_features
                     )
+                    cx, cy = pupil_border["border_x"], pupil_border["border_y"]
                     pupil_fig.axes[0].add_patch(
                         Circle(
                             (cx, cy),
-                            r,
+                            pupil_border["border_radius"],
                             fill=False,
                             color="yellow",
                             linewidth=2,
                             linestyle="-.",
-                            label=f"Border (r={r:.1f}px)",
+                            label=f"包围圆 (r={pupil_border['border_radius']:.1f}px)",
                         )
                     )
+                    if uniformity_boundary_type != "包围圆 (Enclosing circle)":
+                        pupil_fig.axes[0].add_patch(
+                            Circle(
+                                (cx, cy),
+                                uniformity_border["border_radius"],
+                                fill=False,
+                                color="magenta",
+                                linewidth=2,
+                                linestyle="-",
+                                label=f"均匀度边界 (r={uniformity_border['border_radius']:.1f}px)",
+                            )
+                        )
                     pupil_fig.axes[0].legend(loc="upper right", fontsize=8)
-                st.pyplot(pupil_fig)
+                    st.pyplot(pupil_fig)
+                else:
+                    st.warning("⚠️ 包围圆检测失败，请检查图像。")
 
-                # 绘制 FTL 径向拟合图
                 if pupil_type == "平顶光 (Flat-Top)" and pupil_ftl_result is not None:
-                    _render_ftl_radial_plot(pupil_ftl_result, _unit_factor, _unit_label)
+                    if ftl_n_angles > 0 and pupil_ftl_result.get("angular_R_FL_pixels"):
+                        st.subheader("FTL 角度采样 — 各向异性分析")
+                        ang_rfl = pupil_ftl_result["angular_R_FL_pixels"]
+                        ang_q = pupil_ftl_result.get("angular_q", [])
+                        ang_theta = pupil_ftl_result.get("angular_theta_deg", [])
 
-                uniformity_pupil, pupil_cross_section = _render_pupil_type_analysis(
-                    pupil_denoise, pupil_features, pupil_border,
-                    pupil_type, pupil_img, pupil_pixel, border_valid,
-                )
+                        if ang_rfl and not all(np.isnan(ang_rfl)):
+                            ang_rfl_arr = np.array(ang_rfl, dtype=np.float64)
+                            ang_q_arr = np.array(ang_q, dtype=np.float64)
+                            ang_theta_arr = np.deg2rad(np.array(ang_theta, dtype=np.float64))
+
+                            col_ftl1, col_ftl2, col_ftl3, col_ftl4 = st.columns(4)
+                            valid_rfl = ang_rfl_arr[~np.isnan(ang_rfl_arr)]
+                            with col_ftl1:
+                                st.metric("平均 R_FL",
+                                          f"{np.nanmean(valid_rfl) * _unit_factor:.2f} {_unit_label}")
+                            with col_ftl2:
+                                st.metric("R_FL 标准差",
+                                          f"{np.nanstd(valid_rfl) * _unit_factor:.2f} {_unit_label}")
+                            with col_ftl3:
+                                st.metric("R_FL 最大",
+                                          f"{np.nanmax(valid_rfl) * _unit_factor:.2f} {_unit_label}")
+                            with col_ftl4:
+                                eftl = pupil_ftl_result.get("ellipticity_from_ftl", np.nan)
+                                st.metric("FTL 椭圆度", f"{eftl:.4f}" if not np.isnan(eftl) else "N/A",
+                                          help="基于 R_FL(θ) 最大/最小值比，=1 表示圆对称")
+
+                            valid_q = ang_q_arr[~np.isnan(ang_q_arr)]
+                            col_q1, col_q2, col_q3, col_q4 = st.columns(4)
+                            with col_q1:
+                                st.metric("平均 q",
+                                          f"{np.nanmean(valid_q):.2f}" if len(valid_q) > 0 else "N/A")
+                            with col_q2:
+                                st.metric("q 标准差",
+                                          f"{np.nanstd(valid_q):.2f}" if len(valid_q) > 0 else "N/A")
+                            with col_q3:
+                                st.metric("q 最小",
+                                          f"{np.nanmin(valid_q):.2f}" if len(valid_q) > 0 else "N/A")
+                            with col_q4:
+                                st.metric("q 最大",
+                                          f"{np.nanmax(valid_q):.2f}" if len(valid_q) > 0 else "N/A")
+
+                            fig_polar, ax_polar = plt.subplots(figsize=(6, 6), subplot_kw={"projection": "polar"})
+                            ang_theta_rad = np.deg2rad(ang_theta)
+                            display_theta = ang_theta_rad - np.pi
+                            cmap_val = (ang_theta_rad % (2 * np.pi)) / (2 * np.pi)
+                            scatter = ax_polar.scatter(
+                                display_theta, ang_rfl_arr * _unit_factor,
+                                c=cmap_val, cmap="hsv", s=40, alpha=0.8
+                            )
+                            ax_polar.set_theta_zero_location("W")
+                            ax_polar.set_theta_direction(-1)
+                            ax_polar.set_title(
+                                f"R_FL(θ) 极坐标图 0°=左侧 (n={ftl_n_angles})",
+                                fontsize=11
+                            )
+                            plt.tight_layout()
+                            st.pyplot(fig_polar)
+
+                            if len(valid_q) > 0:
+                                fig_qpolar, ax_qpolar = plt.subplots(figsize=(6, 6), subplot_kw={"projection": "polar"})
+                                valid_q_mask = ~np.isnan(ang_q_arr)
+                                ang_q_display = ang_q_arr[valid_q_mask]
+                                theta_q_display = display_theta[valid_q_mask]
+                                cmap_q = (ang_theta_rad[valid_q_mask] % (2 * np.pi)) / (2 * np.pi)
+                                scatter_q = ax_qpolar.scatter(
+                                    theta_q_display, ang_q_display,
+                                    c=cmap_q, cmap="hsv", s=40, alpha=0.8
+                                )
+                                ax_qpolar.set_theta_zero_location("W")
+                                ax_qpolar.set_theta_direction(-1)
+                                ax_qpolar.set_title(
+                                    f"q(θ) 极坐标图 0°=左侧 (n={ftl_n_angles})",
+                                    fontsize=11
+                                )
+                                plt.tight_layout()
+                                st.pyplot(fig_qpolar)
+
+                            fig_ang, ax_ang = plt.subplots(figsize=(8, 3.5))
+                            ax_ang.plot(ang_theta, ang_rfl_arr * _unit_factor, "o-",
+                                        color="steelblue", markersize=4, linewidth=1.2)
+                            ax_ang.set_xlabel("角度 (°)")
+                            ax_ang.set_ylabel(f"R_FL ({_unit_label})")
+                            ax_ang.set_title("FTL 特征半径角向分布")
+                            ax_ang.grid(True, alpha=0.3)
+                            mean_rfl = np.nanmean(valid_rfl) * _unit_factor
+                            ax_ang.axhline(mean_rfl, color="gray", linestyle="--", alpha=0.6,
+                                          label=f"均值={mean_rfl:.2f}")
+                            ax_ang.legend(fontsize=8)
+                            plt.tight_layout()
+                            st.pyplot(fig_ang)
+
+                            if len(valid_q) > 0:
+                                fig_q, ax_q = plt.subplots(figsize=(8, 3.5))
+                                ax_q.plot(ang_theta, ang_q_arr, "o-",
+                                          color="darkorange", markersize=4, linewidth=1.2)
+                                ax_q.set_xlabel("角度 (°)")
+                                ax_q.set_ylabel("q (平顶阶数)")
+                                ax_q.set_title("FTL 平顶阶数 q 角向分布")
+                                ax_q.grid(True, alpha=0.3)
+                                mean_q = np.nanmean(ang_q_arr)
+                                ax_q.axhline(mean_q, color="gray", linestyle="--", alpha=0.6,
+                                             label=f"均值={mean_q:.2f}")
+                                ax_q.legend(fontsize=8)
+                                plt.tight_layout()
+                                st.pyplot(fig_q)
 
                 if has_axis and has_pupil:
-                    st.header("BPP (Beam Parameter Product)")
+                    st.subheader("四、光束质量 — BPP & M²")
                     axis_diameter_mm = axis_features["avg_diameter"] * 1e-3
                     pupil_diameter_mm = pupil_features["avg_diameter"] * 1e-3
                     bpp_result = calculate_bpp(
@@ -727,7 +896,36 @@ def main():
                     M2 = bpp_result["BPP_mm_mrad"] / bpp_diffraction
                     st.metric("M²", f"{M2:.4f}")
 
+            st.header("光轴分析 — Axis Analysis")
+
             if has_axis:
+                st.subheader("一、尺寸特征 — D4σ 直径")
+                col_a1, col_a2 = st.columns(2)
+                with col_a1:
+                    st.metric(
+                        "D4σ X 直径",
+                        f"{axis_features['D_x'] * _unit_factor:.2f} {_unit_label}",
+                    )
+                    st.metric(
+                        "D4σ Y 直径",
+                        f"{axis_features['D_y'] * _unit_factor:.2f} {_unit_label}",
+                    )
+                    st.metric(
+                        "D4σ 平均直径",
+                        f"{axis_features['avg_diameter'] * _unit_factor:.2f} {_unit_label}",
+                    )
+                with col_a2:
+                    st.metric(
+                        "中心强度",
+                        f"{axis_features['center_intensity']:.2f}",
+                    )
+
+                axis_fig = plot_beam_visualization(
+                    axis_img, "Axis", axis_pixel * 1e6, axis_features
+                )
+                st.pyplot(axis_fig)
+
+                st.subheader("二、功率内桶比 — PIB")
                 axis_pib, is_overexposed = pib_ratio(
                     axis_denoise,
                     (axis_features["center_x"], axis_features["center_y"]),
@@ -736,12 +934,11 @@ def main():
                     aperture_diameter_m=aperture_diameter * 1e-3,
                     pixel_size_m=axis_pixel,
                 )
-                st.header("PIB Ratio Calculation - Axis")
-                st.metric("光轴 PIB占比", f"{axis_pib:.4f}")
+                st.metric("PIB 占比", f"{axis_pib:.4f}")
                 if is_overexposed:
                     st.warning("⚠️ 图像可能过曝，PIB占比计算结果可能不准确")
 
-                st.header("Gaussian Fitting - Axis")
+                st.subheader("三、强度分布 — 光轴高斯拟合")
                 st.latex(r"f(x) = A \cdot \exp\left(-\frac{1}{2}\left(\frac{x-\mu}{\sigma}\right)^2\right) + b")
                 axis_gaussian = calculate_xy_diameters(
                     axis_denoise,
@@ -752,11 +949,11 @@ def main():
                 col_g1, col_g2 = st.columns(2)
                 with col_g1:
                     st.metric(
-                        "光轴 高斯直径 X",
+                        "高斯直径 X",
                         f"{axis_gaussian['gaussian_dia_x(um)'] * _unit_factor:.2f} {_unit_label}",
                     )
                     st.metric(
-                        "光轴 高斯直径 Y",
+                        "高斯直径 Y",
                         f"{axis_gaussian['gaussian_dia_y(um)'] * _unit_factor:.2f} {_unit_label}",
                     )
 
@@ -768,7 +965,7 @@ def main():
                     pupil_img, pupil_features["center_x"], pupil_features["center_y"]
                 )
 
-                st.header("Strehl Ratio")
+                st.header("五、波前质量 — 斯特列尔比 (Strehl Ratio)")
                 strehl, ideal_matched = calculate_strehl_ratio_with_energy_conservation(
                     pupil_shifted,
                     axis_shifted,
@@ -780,33 +977,99 @@ def main():
                 )
                 st.metric("斯特列尔比", f"{strehl:.4f}")
                 if strehl >= 0.8:
-                    st.success("Beam quality good (Strehl >= 0.8)")
+                    st.success("光束质量优秀 (Strehl ≥ 0.8)")
                 elif strehl >= 0.5:
-                    st.warning("Beam quality moderate (0.5 <= Strehl < 0.8)")
+                    st.warning("光束质量中等 (0.5 ≤ Strehl < 0.8)")
                 else:
-                    st.error("Beam quality poor (Strehl < 0.5)")
+                    st.error("光束质量较差 (Strehl < 0.5)")
 
-                st.subheader("Strehl Ratio Visualization - 3D (Plotly)")
+                st.subheader("Strehl 三维重建 — 实际 / 理想 / 光瞳")
                 zmin = min(axis_shifted.min(), ideal_matched.min(), pupil_shifted.min())
                 zmax = max(axis_shifted.max(), ideal_matched.max(), pupil_shifted.max())
                 col_s1, col_s2, col_s3 = st.columns(3)
                 with col_s1:
                     st.plotly_chart(
-                        plot_3d_visualization(axis_shifted, "Actual Focus", zmin, zmax),
+                        plot_3d_visualization(axis_shifted, "实际焦斑", zmin, zmax),
                         width="stretch",
                     )
                 with col_s2:
                     st.plotly_chart(
-                        plot_3d_visualization(ideal_matched, "Ideal Focus", zmin, zmax),
+                        plot_3d_visualization(ideal_matched, "理想焦斑", zmin, zmax),
                         width="stretch",
                     )
                 with col_s3:
                     st.plotly_chart(
-                        plot_3d_visualization(pupil_shifted, "Pupil", zmin, zmax),
+                        plot_3d_visualization(pupil_shifted, "光瞳", zmin, zmax),
                         width="stretch",
                     )
 
-            st.header("Results Summary")
+                # ===== 六、波前像差 — Zernike 分解 =====
+                st.header("六、波前像差 — Zernike 多项式分解")
+                try:
+                    zernike_result = fit_zernike(
+                        pupil_denoise,
+                        max_order=max_zernike_order,
+                        pupil_radius_px=pupil_border["border_radius"],
+                    )
+                    zernike_coeffs = zernike_result["coeffs"]
+                    zernike_noll = zernike_result["noll_map"]
+
+                    col_z1, col_z2 = st.columns([2, 1])
+                    with col_z1:
+                        st.caption("各阶 Zernike 系数条形图（按 |系数| 降序）")
+                        sorted_indices = np.argsort(np.abs(zernike_coeffs))[::-1]
+                        top_k = min(10, len(sorted_indices))
+                        top_idx = sorted_indices[:top_k]
+                        top_coeffs = zernike_coeffs[top_idx]
+                        top_noll = [zernike_noll[i] for i in top_idx]
+
+                        labels = [f"Noll {n}" for n in top_noll]
+                        colors = ["steelblue" if c >= 0 else "crimson" for c in top_coeffs]
+
+                        fig_bar, ax_bar = plt.subplots(figsize=(8, 4))
+                        y_pos = np.arange(len(labels))
+                        ax_bar.barh(y_pos, top_coeffs, color=colors)
+                        ax_bar.set_yticks(y_pos)
+                        ax_bar.set_yticklabels(labels)
+                        ax_bar.invert_yaxis()
+                        ax_bar.set_xlabel("系数值")
+                        ax_bar.set_title(f"Top {top_k} Zernike 系数")
+                        ax_bar.axvline(0, color="gray", linewidth=0.8)
+                        ax_bar.grid(axis="x", alpha=0.3)
+                        plt.tight_layout()
+                        st.pyplot(fig_bar)
+
+                    with col_z2:
+                        st.caption("前 5 阶系数")
+                        for rank, idx in enumerate(top_idx[:5], 1):
+                            noll_n = zernike_noll[idx]
+                            label = zernike_order_label(noll_n)
+                            val = zernike_coeffs[idx]
+                            st.metric(
+                                f"#{rank} {label}",
+                                f"{val:.6f}",
+                            )
+                        st.caption(f"RMSE 重建误差: {zernike_result['rmse']:.6f}")
+                        st.caption(f"有效基函数数: {zernike_result['n_terms']}")
+
+                    with st.expander("📋 Zernike 系数完整表"):
+                        zernike_table_data = {
+                            "Noll 序号": [],
+                            "模式名称": [],
+                            "系数值": [],
+                            "绝对值": [],
+                        }
+                        for i, noll_n in enumerate(zernike_noll):
+                            zernike_table_data["Noll 序号"].append(noll_n)
+                            zernike_table_data["模式名称"].append(zernike_order_label(noll_n))
+                            zernike_table_data["系数值"].append(f"{zernike_coeffs[i]:.6f}")
+                            zernike_table_data["绝对值"].append(f"{abs(zernike_coeffs[i]):.6f}")
+                        st.dataframe(zernike_table_data, width='stretch')
+
+                except Exception as e:
+                    st.warning(f"⚠️ Zernike 分解失败: {e}")
+
+            st.header("📊 结果汇总 — Results Summary")
             results = {"参数": [], "值": []}
 
             if has_axis:
@@ -831,9 +1094,11 @@ def main():
                 results["参数"] += [
                     f"光瞳 D4σ X ({_unit_label})",
                     f"光瞳 D4σ Y ({_unit_label})",
-                    f"光瞳 平均直径 ({_unit_label})",
-                    "包围圆半径 (pixel)",
-                    "包围圆直径 (pixel)",
+                    f"光瞳 D4σ 平均 ({_unit_label})",
+                    "包围圆半径 (px)",
+                    "包围圆直径 (px)",
+                    "离心率",
+                    "置信度",
                 ]
                 results["值"] += [
                     f"{pupil_features['D_x'] * _unit_factor:.2f}",
@@ -841,18 +1106,35 @@ def main():
                     f"{pupil_features['avg_diameter'] * _unit_factor:.2f}",
                     f"{pupil_border['border_radius']:.2f}",
                     f"{pupil_border['border_radius'] * 2:.2f}",
+                    f"{pupil_border['eccentricity']:.4f}",
+                    f"{pupil_border['confidence']:.4f}",
                 ]
-                if uniformity_pupil is not None:
-                    results["参数"] += ["RMS Uniformity", "P-V", "圆内均值"]
+                if not np.isnan(pupil_ellipse.get("ellipticity", np.nan)):
+                    results["参数"] += ["短轴 (px)", "长轴 (px)", "椭圆度", "倾角 (°)", "椭圆内均匀度"]
                     results["值"] += [
+                        f"{pupil_ellipse['short_axis']:.2f}",
+                        f"{pupil_ellipse['long_axis']:.2f}",
+                        f"{pupil_ellipse['ellipticity']:.4f}",
+                        f"{pupil_ellipse['angle']:.1f}",
+                        f"{pupil_ellipse['uniformity']:.4f}",
+                    ]
+                if uniformity_pupil is not None:
+                    results["参数"] += [
+                        "均匀度边界半径 (px)",
+                        "RMS 非均匀度",
+                        "峰谷非均匀度",
+                        "圆内均值",
+                    ]
+                    results["值"] += [
+                        f"{uniformity_pupil['radius']:.2f}",
                         f"{uniformity_pupil['rms_uniformity']:.4f}",
                         f"{uniformity_pupil['pv']:.4f}",
                         f"{uniformity_pupil['mean_intensity']:.2f}",
                     ]
                 elif pupil_cross_section is not None and pupil_cross_section["success"]:
                     results["参数"] += [
-                        "X 束腰位置 (pixel)", "X 束腰 σ (pixel)",
-                        "Y 束腰位置 (pixel)", "Y 束腰 σ (pixel)",
+                        "X 束腰位置 (px)", "X 束腰 σ (px)",
+                        "Y 束腰位置 (px)", "Y 束腰 σ (px)",
                     ]
                     results["值"] += [
                         f"{pupil_cross_section['h_mu']:.2f}",
@@ -860,7 +1142,6 @@ def main():
                         f"{pupil_cross_section['v_mu']:.2f}",
                         f"{pupil_cross_section['v_sigma']:.2f}",
                     ]
-                # 光瞳类型拟合结果
                 if pupil_type == "高斯光 (Gaussian)" and pupil_gaussian_result is not None:
                     results["参数"] += [
                         f"光瞳 高斯半腰 X ({_unit_label})",
@@ -885,6 +1166,19 @@ def main():
                         f"{pupil_ftl_result['q_error']:.2f}",
                         f"{pupil_ftl_result['I0']:.2f}",
                     ]
+                    if ftl_n_angles > 0:
+                        ang_q_arr = np.array(pupil_ftl_result.get("angular_q", []), dtype=np.float64)
+                        valid_q = ang_q_arr[~np.isnan(ang_q_arr)]
+                        if len(valid_q) > 0:
+                            results["参数"] += [
+                                "q 角向均值", "q 角向标准差", "q 角向最小", "q 角向最大",
+                            ]
+                            results["值"] += [
+                                f"{np.nanmean(valid_q):.2f}",
+                                f"{np.nanstd(valid_q):.2f}",
+                                f"{np.nanmin(valid_q):.2f}",
+                                f"{np.nanmax(valid_q):.2f}",
+                            ]
 
             if has_axis and has_pupil:
                 results["参数"] += [
@@ -899,6 +1193,51 @@ def main():
                     f"{M2:.4f}",
                     f"{strehl:.4f}",
                 ]
+                if zernike_result is not None:
+                    results["参数"] += ["Zernike RMSE", "Zernike 基函数数"]
+                    results["值"] += [
+                        f"{zernike_result['rmse']:.6f}",
+                        f"{zernike_result['n_terms']}",
+                    ]
+
+            if has_axis:
+                results["参数"] += [
+                    f"光轴 D4σ X ({_unit_label})",
+                    f"光轴 D4σ Y ({_unit_label})",
+                    f"光轴 D4σ 平均 ({_unit_label})",
+                    "PIB",
+                    f"光轴 高斯直径 X ({_unit_label})",
+                    f"光轴 高斯直径 Y ({_unit_label})",
+                ]
+                results["值"] += [
+                    f"{axis_features['D_x'] * _unit_factor:.2f}",
+                    f"{axis_features['D_y'] * _unit_factor:.2f}",
+                    f"{axis_features['avg_diameter'] * _unit_factor:.2f}",
+                    f"{axis_pib:.4f}",
+                    f"{axis_gaussian['gaussian_dia_x(um)'] * _unit_factor:.2f}",
+                    f"{axis_gaussian['gaussian_dia_y(um)'] * _unit_factor:.2f}",
+                ]
+                results["值"] += [
+                    f"{pupil_features['D_x'] * _unit_factor:.2f}",
+                    f"{pupil_features['D_y'] * _unit_factor:.2f}",
+                    f"{pupil_features['avg_diameter'] * _unit_factor:.2f}",
+                    f"{pupil_border['border_radius']:.2f}",
+                    f"{pupil_border['border_radius'] * 2:.2f}",
+                    f"{pupil_border['eccentricity']:.4f}",
+                    f"{pupil_border['confidence']:.4f}",
+                ]
+                if not np.isnan(pupil_ellipse.get("ellipticity", np.nan)):
+                    results["参数"] += [
+                        "短轴 (px)", "长轴 (px)",
+                        "椭圆度", "倾角 (°)", "椭圆内均匀度",
+                    ]
+                    results["值"] += [
+                        f"{pupil_ellipse['short_axis']:.2f}",
+                        f"{pupil_ellipse['long_axis']:.2f}",
+                        f"{pupil_ellipse['ellipticity']:.4f}",
+                        f"{pupil_ellipse['angle']:.1f}",
+                        f"{pupil_ellipse['uniformity']:.4f}",
+                    ]
 
             import pandas as pd
 

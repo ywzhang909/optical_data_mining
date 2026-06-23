@@ -14,7 +14,7 @@ from .beam_analysis import (
     pib_ratio,
 )
 from .diffraction import calculate_strehl_ratio_with_energy_conservation, shift_to_center_fft
-from .image_utils import subtract_dark_field
+from .image_utils import subtract_dark_field, ellipse_fit
 
 
 def convert_to_cv(float_image) -> np.ndarray:
@@ -69,56 +69,6 @@ def find_spot_border(image):
         radius = np.nan
 
     return {"border_x": x, "border_y": y, "border_radius": radius}
-
-
-def ellipse_fit(uint8_image):
-    # 计算噪声阈值（使用30%作为阈值）
-    noise_threshhold = np.max(uint8_image) * 0.3
-
-    # 二值化处理
-    binary_image = cv2.threshold(uint8_image, noise_threshhold, 255, cv2.THRESH_BINARY)[1]
-
-    # 查找轮廓
-    try:
-        contours, _ = cv2.findContours(binary_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        assert contours, "No contours found"
-        # 找到最大的轮廓
-        largest_contour = max(contours, key=cv2.contourArea)
-        (ellipse_center_x, ellipse_center_y), (short_axis, long_axis), angle = cv2.fitEllipse(largest_contour)
-    except (AssertionError, ValueError):
-        return {
-            "ellipse_center_x": np.nan,
-            "ellipse_center_y": np.nan,
-            "short_axis": np.nan,
-            "long_axis": np.nan,
-            "ellipticity": np.nan,
-            "angle": np.nan,
-            "uniformity": np.nan,
-        }
-
-    area = cv2.contourArea(largest_contour)
-    # 创建掩膜用于后续处理
-    mask = np.zeros_like(uint8_image, dtype=np.uint8)
-    if area > 100:
-        # 将主轮廓内部填充为白色 (255)
-        cv2.drawContours(mask, [largest_contour], -1, (255,), thickness=cv2.FILLED)
-        # 使用掩膜提取光斑内的所有像素
-        mean_val, std_val = cv2.meanStdDev(uint8_image, mask=mask)
-        mean_intensity = mean_val[0][0]
-        std_intensity = std_val[0][0]
-        uniformity = std_intensity / mean_intensity
-    else:
-        uniformity = np.nan
-
-    return {
-        "ellipse_center_x": ellipse_center_x,
-        "ellipse_center_y": ellipse_center_y,
-        "short_axis": short_axis,
-        "long_axis": long_axis,
-        "ellipticity": long_axis / short_axis,
-        "angle": angle,
-        "uniformity": uniformity,
-    }
 
 
 class BeamAnalysisMetrics:

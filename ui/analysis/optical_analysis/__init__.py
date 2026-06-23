@@ -1,11 +1,12 @@
 """
 光学分析模块
-============
+===========
 
 提供光束质量分析的核心算法:
 - 光束特征提取 (D4σ, PIB, 高斯拟合)
 - 衍射计算 (菲涅尔衍射, FFT居中, 斯特列尔比)
 - 图像处理工具
+- Zernike 波前分解
 - 分析指标计算
 - 可视化工具
 - 历史记录管理
@@ -14,6 +15,7 @@
     - beam_analysis: 光束质量分析算法
     - diffraction: 衍射计算算法
     - image_utils: 图像处理工具
+    - zernike_analysis: Zernike 波前分解
     - beam_analysis_metrics: 光束分析指标计算
     - visualization: 可视化工具
     - history_manager: 历史记录管理
@@ -53,6 +55,9 @@ from .history_manager import HistoryManager
 from .image_utils import (
     calculate_background_threshold,
     clip_negative_values,
+    ellipse_fit,
+    find_spot_border,
+    find_spot_border_energy,
     load_image,
     normalize_image,
     normalize_image_for_display,
@@ -60,6 +65,13 @@ from .image_utils import (
     read_image_to_numpy,
     resize_image,
     subtract_dark_field,
+)
+
+# Zernike 波前分解模块
+from .zernike_analysis import (
+    fit_zernike,
+    make_zernike_grid,
+    recommend_zernike_order,
 )
 
 # 可视化模块
@@ -98,6 +110,13 @@ __all__ = [
     "pad_to_square",
     "clip_negative_values",
     "calculate_background_threshold",
+    "find_spot_border",
+    "find_spot_border_energy",
+    "ellipse_fit",
+    # zernike_analysis
+    "fit_zernike",
+    "make_zernike_grid",
+    "recommend_zernike_order",
     # beam_analysis_metrics
     "BeamAnalysisMetrics",
     # history_manager

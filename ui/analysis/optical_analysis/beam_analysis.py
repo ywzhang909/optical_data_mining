@@ -246,6 +246,90 @@ def _ftl_model(R: np.ndarray, I0: float, R_FL: float, q: float) -> np.ndarray:
     return result
 
 
+def _sample_ray(image: np.ndarray, cx: float, cy: float, theta: float,
+                max_radius: int, step: float = 1.0) -> tuple[np.ndarray, np.ndarray]:
+    """沿单条射线采样图像强度（双线性插值）。
+
+    Args:
+        image: 输入图像 (H, W)，任意 dtype，会被转为 float64
+        cx, cy: 中心坐标（像素）
+        theta: 采样角度（弧度），0=右方，π/2=下方（numpy row-major）
+        max_radius: 最大采样半径（像素），必须 > 0
+        step: 径向采样步长（像素），必须 > 0
+
+    Returns:
+        r_arr: 径向距离数组 (0, step, 2*step, ..., max_radius)
+        i_arr: 对应位置的插值强度
+    """
+    image = np.asarray(image, dtype=np.float64)
+    h, w = image.shape
+    if max_radius <= 0 or step <= 0:
+        return np.array([0.0]), np.array([0.0])
+    cx = float(cx)
+    cy = float(cy)
+    n = int(np.floor(max_radius / step)) + 1
+    r_arr = np.arange(n, dtype=np.float64) * step
+    xp = cx + r_arr * np.cos(theta)
+    yp = cy + r_arr * np.sin(theta)
+
+    valid = (xp >= 0) & (xp < w - 1) & (yp >= 0) & (yp < h - 1)
+    if not np.any(valid):
+        return r_arr, np.zeros_like(r_arr)
+
+    x0 = np.floor(xp).astype(int)
+    y0 = np.floor(yp).astype(int)
+    x1 = x0 + 1
+    y1 = y0 + 1
+    wx = xp - x0
+    wy = yp - y0
+
+    I = np.zeros_like(r_arr, dtype=np.float64)
+    for yy, yw in [(y0, 1.0 - wy), (y1, wy)]:
+        for xx, xw in [(x0, 1.0 - wx), (x1, xw)]:
+            mask = valid & (yy >= 0) & (yy < h) & (xx >= 0) & (xx < w)
+            if np.any(mask):
+                I[mask] += xw[mask] * yw[mask] * image[yy[mask], xx[mask]]
+    return r_arr, I
+
+
+def _fit_ftl_1d(r: np.ndarray, intensity: np.ndarray, max_r: float) -> dict:
+    """对单条射线的一维强度剖面做 FTL 拟合。"""
+    valid = intensity > 0
+    if np.sum(valid) < 5:
+        return {"success": False, "R_FL": np.nan, "R_FL_pixels": np.nan,
+                "q": np.nan, "I0": np.nan, "R_FL_error": np.nan,
+                "q_error": np.nan, "I0_error": np.nan}
+
+    R_fit = r[valid]
+    I_fit = intensity[valid]
+    I0_guess = float(max(I_fit[0], np.max(I_fit)))
+    R_FL_guess = float(max_r * 0.3)
+    q_guess = 4.0
+    try:
+        popt, pcov = curve_fit(
+            _ftl_model, R_fit, I_fit,
+            p0=[I0_guess, R_FL_guess, q_guess],
+            bounds=([0.0, 0.0, 1.5], [np.inf, float(max_r), 50.0]),
+            maxfev=10000,
+        )
+        I0_fit, R_FL_fit, q_fit = popt
+        perr = np.sqrt(np.diag(pcov))
+        return {
+            "success": True,
+            "R_FL": float(R_FL_fit),
+            "R_FL_pixels": float(R_FL_fit),
+            "q": float(q_fit),
+            "I0": float(I0_fit),
+            "R_FL_error": float(perr[1]),
+            "q_error": float(perr[2]),
+            "I0_error": float(perr[0]),
+        }
+    except (RuntimeError, ValueError):
+        return {"success": False, "R_FL": np.nan, "R_FL_pixels": np.nan,
+                "q": np.nan, "I0": np.nan, "R_FL_error": np.nan,
+                "q_error": np.nan, "I0_error": np.nan}
+
+
 def fit_flat_topped_lorentz(
     image: np.ndarray,
     cx: float,
@@ -253,39 +337,53 @@ def fit_flat_topped_lorentz(
     pixel_size: float = 1.0,
     max_radius: int | None = None,
     radial_step: float = 1.0,
+    n_angles: int = 36,
 ) -> dict[str, Any]:
     """
     对光瞳图像进行 FTL (Flat-Topped Lorentz) 模型拟合，计算特征半径 R_FL。
 
     处理流程:
-        1. 使用 compute_radial_profile() 计算径向剖面 Ī(R)
-        2. 使用 scipy.optimize.curve_fit 拟合三参数 (I0, R_FL, q)
-        3. 从协方差矩阵估计参数误差
+        1. 使用 compute_radial_profile() 计算径向剖面 Ī(R)（角向平均）
+        2. 对每个角度 θ，沿射线采样并独立拟合 FTL，得到 R_FL(θ)
+        3. 从角向结果统计平均、标准差、离心率
+        4. 拟合全局径向剖面作为参考（向后兼容）
 
     Args:
         image: 去暗场后的二维光强图像
-        cx: 质心 X 坐标（像素）
-        cy: 质心 Y 坐标（像素）
+        cx: 光斑中心 X 坐标（像素），通常取包围圆圆心
+        cy: 光斑中心 Y 坐标（像素）
         pixel_size: 像素尺寸（微米/像素）
-        max_radius: 最大拟合半径（像素）。None 时自动取 min(cx, cy, w-cx, h-cy)
+        max_radius: 最大拟合半径（像素）。None 时取图像短边/2
         radial_step: 径向分箱的步长（像素），默认 1.0
+        n_angles: 角度采样数（0 表示仅用角向平均，不逐角度拟合）
 
     Returns:
         dict 包含以下键:
-            - R_FL: 特征半径 (μm)
-            - R_FL_pixels: 特征半径 (像素)
-            - q: 平顶阶数
-            - I0: 拟合中心强度
-            - R_FL_error: R_FL 的标准误差 (μm)
-            - q_error: q 的标准误差
-            - I0_error: I0 的标准误差
-            - radial_R: 径向距离数组 (像素)
+            - R_FL: 角向平均特征半径 (μm)
+            - R_FL_pixels: 角向平均特征半径 (像素)
+            - R_FL_std: R_FL 角向标准差 (μm)
+            - R_FL_min / R_FL_max: 角向极值 (μm)
+            - ellipticity_from_ftl: 基于 R_FL(θ) 的椭圆度 = 长轴/短轴
+            - q / I0: 全局径向平均拟合参数
+            - R_FL_error / q_error / I0_error: 全局拟合标准误差
+            - radial_R: 径向距离数组 (μm)
             - radial_intensity: 径向平均强度数组
-            - fitted_intensity: FTL 拟合强度数组
-            - success: 拟合是否成功
+            - fitted_intensity: 全局 FTL 拟合强度数组
+            - angular_theta_deg: 各角度（度）
+            - angular_R_FL_pixels: 各角度 R_FL（像素）
+            - angular_q: 各角度 q
+            - angular_I0: 各角度 I0
+            - angular_success_rate: 各角度拟合成功率
+            - success: 全局拟合是否成功
             - message: 状态描述
     """
-    # 1. 计算径向剖面（共用工具函数）
+    # 0. 确定 max_radius
+    if max_radius is None:
+        h, w = image.shape
+        max_radius = int(min(h, w) / 2)
+    max_radius = max(4, int(max_radius))
+
+    # 1. 全局径向剖面（角向平均）——向后兼容
     profile = compute_radial_profile(
         image, cx, cy,
         max_radius=max_radius,
@@ -293,17 +391,33 @@ def fit_flat_topped_lorentz(
         min_pixels_per_bin=3,
     )
     if not profile["success"]:
-        return {"success": False, "message": profile["message"]}
+        return {"success": False, "message": profile["message"], "R_FL": np.nan,
+                "R_FL_pixels": np.nan, "q": np.nan, "I0": np.nan,
+                "R_FL_error": np.nan, "q_error": np.nan, "I0_error": np.nan,
+                "R_FL_std": np.nan, "R_FL_min": np.nan, "R_FL_max": np.nan,
+                "ellipticity_from_ftl": np.nan,
+                "angular_theta_deg": [], "angular_R_FL_pixels": [],
+                "angular_q": [], "angular_I0": [], "angular_success_rate": 0.0,
+                "radial_R": profile["radial_R"] * pixel_size if "radial_R" in profile else np.array([]),
+                "radial_intensity": profile.get("radial_intensity", np.array([])),
+                "fitted_intensity": np.array([])}
 
-    # 2. 提取有效数据点用于拟合
     valid_mask = profile["valid_mask"]
     if np.sum(valid_mask) < 5:
-        return {"success": False, "message": f"有效径向数据点不足 ({np.sum(valid_mask)} < 5)"}
+        return {"success": False, "message": f"有效径向数据点不足 ({np.sum(valid_mask)} < 5)",
+                "R_FL": np.nan, "R_FL_pixels": np.nan, "q": np.nan, "I0": np.nan,
+                "R_FL_error": np.nan, "q_error": np.nan, "I0_error": np.nan,
+                "R_FL_std": np.nan, "R_FL_min": np.nan, "R_FL_max": np.nan,
+                "ellipticity_from_ftl": np.nan,
+                "angular_theta_deg": [], "angular_R_FL_pixels": [],
+                "angular_q": [], "angular_I0": [], "angular_success_rate": 0.0,
+                "radial_R": profile["radial_R"] * pixel_size,
+                "radial_intensity": profile["radial_intensity"],
+                "fitted_intensity": np.array([])}
 
+    # 2. 全局（角向平均）径向拟合
     R_fit = profile["radial_R"][valid_mask]
     I_fit = profile["radial_intensity"][valid_mask]
-
-    # 3. 非线性最小二乘拟合
     I0_guess = float(max(I_fit[0], np.max(image)))
     max_r = profile["max_radius"]
     R_FL_guess = float(max_r * 0.3)
@@ -311,40 +425,89 @@ def fit_flat_topped_lorentz(
 
     try:
         popt, pcov = curve_fit(
-            _ftl_model,
-            R_fit,
-            I_fit,
+            _ftl_model, R_fit, I_fit,
             p0=[I0_guess, R_FL_guess, q_guess],
             bounds=([0.0, 0.0, 1.5], [np.inf, float(max_r), 50.0]),
             maxfev=10000,
         )
-
         I0_fit, R_FL_fit, q_fit = popt
         perr = np.sqrt(np.diag(pcov))
-        I0_err, R_FL_err, q_err = perr
-
         fitted_intensity = _ftl_model(R_fit, I0_fit, R_FL_fit, q_fit)
-
         success = True
         message = "拟合成功"
     except (RuntimeError, ValueError) as e:
         I0_fit, R_FL_fit, q_fit = np.nan, np.nan, np.nan
-        I0_err, R_FL_err, q_err = np.nan, np.nan, np.nan
+        perr = [np.nan, np.nan, np.nan]
         fitted_intensity = np.full_like(R_fit, np.nan)
         success = False
-        message = f"拟合失败: {e}"
+        message = f"全局拟合失败: {e}"
+
+    # 3. 逐角度射线采样 + FTL 拟合
+    angular_theta_deg = []
+    angular_R_FL_pixels = []
+    angular_q = []
+    angular_I0 = []
+    angular_R_FL_error = []
+    angular_success_flags = []
+
+    if n_angles > 0 and success:
+        thetas = np.linspace(0, 2 * np.pi, n_angles, endpoint=False)
+        for theta in thetas:
+            r_arr, i_arr = _sample_ray(image, cx, cy, theta, max_radius, step=radial_step)
+            result = _fit_ftl_1d(r_arr, i_arr, max_radius)
+            angular_theta_deg.append(np.degrees(theta))
+            angular_R_FL_pixels.append(result["R_FL_pixels"])
+            angular_q.append(result["q"])
+            angular_I0.append(result["I0"])
+            angular_R_FL_error.append(result["R_FL_error"])
+            angular_success_flags.append(result["success"])
+
+    ang_rfl = np.array(angular_R_FL_pixels, dtype=np.float64)
+    ang_q = np.array(angular_q, dtype=np.float64)
+    ang_I0 = np.array(angular_I0, dtype=np.float64)
+    ang_ok = np.array(angular_success_flags, dtype=bool)
+
+    if np.any(ang_ok) and not np.all(np.isnan(ang_rfl[ang_ok])):
+        valid_rfl = ang_rfl[ang_ok]
+        R_FL_mean_px = float(np.nanmean(valid_rfl))
+        R_FL_std_px = float(np.nanstd(valid_rfl))
+        R_FL_min_px = float(np.nanmin(valid_rfl))
+        R_FL_max_px = float(np.nanmax(valid_rfl))
+        if R_FL_min_px > 0:
+            fftl_ellipticity = R_FL_max_px / R_FL_min_px
+        else:
+            fftl_ellipticity = np.nan
+        # 用最小二乘拟合椭圆 (R_FL(θ) = a / (1 - e*cos(θ-θ0)) 近似)
+        # 简化版：主/次轴 = max/min R_FL
+        success_rate = float(np.mean(ang_ok))
+    else:
+        R_FL_mean_px = float(R_FL_fit) if not np.isnan(R_FL_fit) else np.nan
+        R_FL_std_px = np.nan
+        R_FL_min_px = np.nan
+        R_FL_max_px = np.nan
+        fftl_ellipticity = np.nan
+        success_rate = 0.0
 
     return {
-        "R_FL": float(R_FL_fit) * pixel_size,
-        "R_FL_pixels": float(R_FL_fit),
-        "q": float(q_fit),
-        "I0": float(I0_fit),
-        "R_FL_error": float(R_FL_err) * pixel_size,
-        "q_error": float(q_err),
-        "I0_error": float(I0_err),
+        "R_FL": float(R_FL_mean_px * pixel_size) if not np.isnan(R_FL_mean_px) else np.nan,
+        "R_FL_pixels": R_FL_mean_px,
+        "q": float(q_fit) if not np.isnan(q_fit) else np.nan,
+        "I0": float(I0_fit) if not np.isnan(I0_fit) else np.nan,
+        "R_FL_error": float(perr[1] * pixel_size) if len(perr) > 1 else np.nan,
+        "q_error": float(perr[2]) if len(perr) > 2 else np.nan,
+        "I0_error": float(perr[0]) if len(perr) > 0 else np.nan,
+        "R_FL_std": float(R_FL_std_px * pixel_size) if not np.isnan(R_FL_std_px) else np.nan,
+        "R_FL_min": float(R_FL_min_px * pixel_size) if not np.isnan(R_FL_min_px) else np.nan,
+        "R_FL_max": float(R_FL_max_px * pixel_size) if not np.isnan(R_FL_max_px) else np.nan,
+        "ellipticity_from_ftl": fftl_ellipticity,
         "radial_R": profile["radial_R"] * pixel_size,
         "radial_intensity": profile["radial_intensity"],
-        "fitted_intensity": fitted_intensity,
+        "fitted_intensity": fitted_intensity if success else np.array([]),
+        "angular_theta_deg": angular_theta_deg,
+        "angular_R_FL_pixels": angular_R_FL_pixels,
+        "angular_q": angular_q,
+        "angular_I0": angular_I0,
+        "angular_success_rate": success_rate,
         "success": success,
         "message": message,
     }

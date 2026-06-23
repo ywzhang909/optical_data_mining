@@ -10,11 +10,12 @@
 """
 import math
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 import cv2
 import numpy as np
 from PIL import Image
+from scipy.stats import binned_statistic
 
 
 def normalize_image_for_display(img: np.ndarray) -> np.ndarray:
@@ -237,10 +238,10 @@ def find_spot_border(image: np.ndarray,
     鲁棒地检测光斑边界并拟合包围圆。
 
     修复要点：
-    1. 去噪在阈值化之前完成，避免阈值受去噪结果影响；
-    2. 采用自适应阈值（Otsu/自适应/百分比）替代固定 max/e 阈值；
-    3. 用质心约束包围圆中心，防止轮廓残缺导致圆心漂移；
-    4. 增加面积、圆度等 sanity check，失败时回退到矩估计。
+     1. 去噪在阈值化之前完成，避免阈值受去噪结果影响；
+     2. 采用自适应阈值（Otsu/自适应/百分比）替代固定 max/e 阈值；
+     3. 用质心约束包围圆中心，防止轮廓残缺导致圆心漂移；
+     4. 增加面积、圆度等 sanity check，失败时回退到矩估计。
 
     Args:
         image: 输入灰度图像 (H, W)，任意 dtype
@@ -402,6 +403,203 @@ def find_spot_border(image: np.ndarray,
     return result
 
 
+def _fallback_uniform(h: int, w: int, cx: float, cy: float) -> dict:
+    """无有效信号时的保守回退：以图像中心和短边 1/4 为默认边界。"""
+    radius = min(h, w) / 4.0
+    return {
+        'border_x': float(cx),
+        'border_y': float(cy),
+        'border_radius': float(radius),
+        'center_x': float(cx),
+        'center_y': float(cy),
+        'energy_fraction': 0.0,
+        'actual_energy_ratio': 0.0,
+        'edge_gradient': 0.0,
+        'method': 'fallback_uniform',
+        'total_energy': 0.0,
+        'diagnostics': {
+            'r_profile': [],
+            'I_profile': [],
+            'cum_energy': [],
+        },
+    }
+
+
+def find_spot_border_energy(
+    image: np.ndarray,
+    center: Optional[tuple[float, float]] = None,
+    energy_fraction: float = 0.95,
+    edge_method: Literal['energy', 'd4sigma', 'fwhm', 'ellipse', 'enclosing'] = 'energy',
+    r_max_factor: float = 2.0,
+    n_bins: int = 200,
+    smooth: bool = True,
+) -> dict:
+    """
+    基于能量分布的鲁棒光斑边界检测。
+
+    修复核心：用径向累积能量替代几何外接圆，避免轮廓毛刺导致半径膨胀。
+
+    Args:
+        image: 输入灰度图像 (H, W)
+        center: 光斑中心 (x, y)；None 则自动用质心
+        energy_fraction: 能量约束比例 (0.8~0.99)，默认 0.95
+        edge_method:
+            'energy'   - 累积能量达到 energy_fraction 的半径
+            'd4sigma'  - 4倍标准差半径（ISO 11146 标准）
+            'fwhm'     - 半高全宽等效半径
+            'ellipse'  - 椭圆拟合等效半径（sqrt(半长轴×半短轴)）
+            'enclosing'- 原始 minEnclosingCircle（不推荐）
+        r_max_factor: 搜索最大半径 = min(H,W) * r_max_factor / 2
+        n_bins: 径向分箱数
+        smooth: 是否对径向曲线做平滑后再求导
+
+    Returns:
+        dict: 包含边界参数与诊断信息
+    """
+    if not isinstance(image, np.ndarray) or image.ndim != 2:
+        raise ValueError("Input must be 2D numpy array")
+
+    img = np.asarray(image, dtype=np.float64)
+    h, w = img.shape
+
+    # ---------- 1. 中心定位（质心，对噪声鲁棒）----------
+    if center is None:
+        bg = np.percentile(img, 10)
+        mask = img > bg + 0.5 * (np.percentile(img, 90) - bg)
+        if np.sum(mask) > 0:
+            cy = np.average(np.where(mask)[0], weights=img[mask])
+            cx = np.average(np.where(mask)[1], weights=img[mask])
+        else:
+            cy, cx = h / 2.0, w / 2.0
+    else:
+        cx, cy = center
+
+    # ---------- 2. 构建径向坐标 ----------
+    y_idx, x_idx = np.indices((h, w))
+    r = np.sqrt((x_idx - cx) ** 2 + (y_idx - cy) ** 2)
+
+    # ---------- 3. 径向分箱统计 ----------
+    r_max = min(h, w) * r_max_factor / 2.0
+    bins = np.linspace(0, r_max, n_bins)
+    bin_centers = (bins[:-1] + bins[1:]) / 2.0
+
+    mean_I, _, _ = binned_statistic(
+        r.ravel(), img.ravel(), statistic='mean', bins=bins
+    )
+    valid = ~np.isnan(mean_I)
+    bin_centers = bin_centers[valid]
+    mean_I = mean_I[valid]
+
+    if smooth and len(mean_I) > 15:
+        from scipy.ndimage import uniform_filter1d
+        mean_I_smooth = uniform_filter1d(mean_I, size=5, mode='nearest')
+    else:
+        mean_I_smooth = mean_I
+
+    # ---------- 4. 计算径向累积能量 ----------
+    dr = bin_centers[1] - bin_centers[0] if len(bin_centers) > 1 else 1.0
+    ring_areas = 2 * np.pi * bin_centers * dr
+    ring_energy = mean_I * ring_areas
+
+    cum_energy = np.cumsum(ring_energy)
+    total_energy = cum_energy[-1]
+
+    if total_energy <= 0:
+        return _fallback_uniform(h, w, cx, cy)
+
+    # ---------- 5. 根据 edge_method 计算边界 ----------
+    eccentricity = None
+    if edge_method == 'energy':
+        target = total_energy * energy_fraction
+        idx = np.searchsorted(cum_energy, target)
+        idx = min(idx, len(bin_centers) - 1)
+        radius = bin_centers[idx]
+
+    elif edge_method == 'd4sigma':
+        weights = ring_energy / total_energy
+        mean_r = np.sum(bin_centers * weights)
+        var_r = np.sum((bin_centers - mean_r) ** 2 * weights)
+        sigma_r = np.sqrt(var_r)
+        radius = 4.0 * sigma_r
+
+    elif edge_method == 'fwhm':
+        peak_I = np.max(mean_I_smooth)
+        half_max = peak_I / 2.0
+        below = mean_I_smooth < half_max
+        if np.any(below):
+            idx = np.where(below)[0][0]
+            if idx > 0:
+                r1, r2 = bin_centers[idx - 1], bin_centers[idx]
+                i1, i2 = mean_I_smooth[idx - 1], mean_I_smooth[idx]
+                t = (half_max - i1) / (i2 - i1) if (i2 - i1) != 0 else 0.0
+                radius = r1 + t * (r2 - r1)
+            else:
+                radius = bin_centers[0]
+        else:
+            radius = bin_centers[-1]
+
+    elif edge_method == 'ellipse':
+        thresh = np.percentile(img, 80)
+        _, binary = cv2.threshold(img.astype(np.uint8), thresh, 255, cv2.THRESH_BINARY)
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if contours:
+            largest = max(contours, key=cv2.contourArea)
+            if len(largest) >= 5:
+                ellipse = cv2.fitEllipse(largest)
+                _, (ma, mi), angle = ellipse
+                eccentricity = math.sqrt(1 - (min(ma, mi) / max(ma, mi)) ** 2) if max(ma, mi) > 0 else 0.0
+                radius = math.sqrt(ma * mi)
+            else:
+                (_, _), radius = cv2.minEnclosingCircle(largest)
+                eccentricity = 0.0
+        else:
+            radius = min(h, w) / 4.0
+            eccentricity = 0.0
+
+    elif edge_method == 'enclosing':
+        thresh = np.percentile(img, 80)
+        _, binary = cv2.threshold(img.astype(np.uint8), thresh, 255, cv2.THRESH_BINARY)
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if contours:
+            largest = max(contours, key=cv2.contourArea)
+            (_, _), radius = cv2.minEnclosingCircle(largest)
+        else:
+            radius = min(h, w) / 4.0
+
+    else:
+        raise ValueError(f"Unknown edge_method: {edge_method}")
+
+    # ---------- 6. 诊断：计算轮廓质量 ----------
+    inside_mask = r <= radius
+    energy_inside = np.sum(img[inside_mask])
+    energy_ratio = energy_inside / np.sum(img) if np.sum(img) > 0 else 0.0
+
+    idx_bound = np.searchsorted(bin_centers, radius)
+    if idx_bound < len(mean_I_smooth) - 1:
+        edge_gradient = abs(mean_I_smooth[idx_bound + 1] - mean_I_smooth[max(0, idx_bound - 1)])
+    else:
+        edge_gradient = 0.0
+
+    return {
+        'border_x': float(cx),
+        'border_y': float(cy),
+        'border_radius': float(radius),
+        'center_x': float(cx),
+        'center_y': float(cy),
+        'energy_fraction': float(energy_fraction),
+        'actual_energy_ratio': float(energy_ratio),
+        'edge_gradient': float(edge_gradient),
+        'method': edge_method,
+        'total_energy': float(total_energy),
+        'diagnostics': {
+            'r_profile': bin_centers.tolist(),
+            'I_profile': mean_I_smooth.tolist(),
+            'cum_energy': cum_energy.tolist(),
+        },
+        'eccentricity': eccentricity,
+    }
+
+
 def _fallback_moments(image: np.ndarray, return_mask: bool) -> dict:
     """
     无轮廓时的回退策略：基于全局灰度矩估计
@@ -432,3 +630,42 @@ def _fallback_moments(image: np.ndarray, return_mask: bool) -> dict:
     if return_mask:
         result['mask'] = np.zeros_like(image, dtype=np.uint8)
     return result
+
+
+def ellipse_fit(uint8_image: np.ndarray) -> dict:
+    noise_threshhold = np.max(uint8_image) * 0.3
+    binary_image = cv2.threshold(uint8_image, noise_threshhold, 255, cv2.THRESH_BINARY)[1]
+    try:
+        contours, _ = cv2.findContours(binary_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        assert contours, "No contours found"
+        largest_contour = max(contours, key=cv2.contourArea)
+        (ellipse_center_x, ellipse_center_y), (short_axis, long_axis), angle = cv2.fitEllipse(largest_contour)
+    except (AssertionError, ValueError):
+        return {
+            "ellipse_center_x": np.nan,
+            "ellipse_center_y": np.nan,
+            "short_axis": np.nan,
+            "long_axis": np.nan,
+            "ellipticity": np.nan,
+            "angle": np.nan,
+            "uniformity": np.nan,
+        }
+    area = cv2.contourArea(largest_contour)
+    mask = np.zeros_like(uint8_image, dtype=np.uint8)
+    if area > 100:
+        cv2.drawContours(mask, [largest_contour], -1, (255,), thickness=cv2.FILLED)
+        mean_val, std_val = cv2.meanStdDev(uint8_image, mask=mask)
+        mean_intensity = mean_val[0][0]
+        std_intensity = std_val[0][0]
+        uniformity = std_intensity / mean_intensity
+    else:
+        uniformity = np.nan
+    return {
+        "ellipse_center_x": ellipse_center_x,
+        "ellipse_center_y": ellipse_center_y,
+        "short_axis": short_axis,
+        "long_axis": long_axis,
+        "ellipticity": long_axis / short_axis,
+        "angle": angle,
+        "uniformity": uniformity,
+    }

@@ -12,22 +12,6 @@
 import numpy as np
 from loguru import logger
 
-try:
-    from aotools.opticalpropagation import twoStepFresnel
-except ImportError as exc:
-    twoStepFresnel = None
-    _AOTOOLS_IMPORT_ERROR = exc
-else:
-    _AOTOOLS_IMPORT_ERROR = None
-
-
-def _require_aotools() -> None:
-    if twoStepFresnel is None:
-        raise RuntimeError(
-            "aotools is required for fnr3, propagate_through_lens, and Strehl propagation. "
-            "Install the project dependencies or repair the local aotools/numba installation."
-        ) from _AOTOOLS_IMPORT_ERROR
-
 
 def crop_to_square(img: np.ndarray) -> np.ndarray:
     """
@@ -212,27 +196,21 @@ def fnr3(
     Ex = Ex * lens_phase
     logger.debug(f"Max lens phase shift: {np.max(np.abs(phase)):.3f} rad")
 
-    # # 输入二次相位因子
-    # phase_in = np.exp(1j * k0 / (2 * zz) * (x1v[np.newaxis, :]**2 + y1v[:, np.newaxis]**2))
-    # Ex_hat = Ex * phase_in
+    # 输入二次相位因子
+    phase_in = np.exp(1j * k0 / (2 * zz) * (x1v[np.newaxis, :]**2 + y1v[:, np.newaxis]**2))
+    Ex_hat = Ex * phase_in
 
-    # K = 2 * np.pi / (lambda_m * zz)
-    # F_y = np.exp(-1j * K * np.outer(y1v, y2v))   # shape (Ny, Ny_out) = (Ny, Ny)
-    # F_x = np.exp(-1j * K * np.outer(x1v, x2v))   # shape (Nx, Nx_out) = (Nx, Nx)
+    K = 2 * np.pi / (lambda_m * zz)
+    F_y = np.exp(-1j * K * np.outer(y1v, y2v))   # shape (Ny, Ny_out) = (Ny, Ny)
+    F_x = np.exp(-1j * K * np.outer(x1v, x2v))   # shape (Nx, Nx_out) = (Nx, Nx)
 
-    # # 执行分离变量的菲涅尔积分：Ex2 = F_y^T @ Ex_hat @ F_x
-    # temp = F_y.T @ Ex_hat          # (Ny, Ny) @ (Ny, Nx) -> (Ny, Nx)
-    # Ex2 = temp @ F_x               # (Ny, Nx) @ (Nx, Nx) -> (Ny, Nx)
+    # 执行分离变量的菲涅尔积分：Ex2 = F_y^T @ Ex_hat @ F_x
+    temp = F_y.T @ Ex_hat          # (Ny, Ny) @ (Ny, Nx) -> (Ny, Nx)
+    Ex2 = temp @ F_x               # (Ny, Nx) @ (Nx, Nx) -> (Ny, Nx)
 
-    # # 输出二次相位因子 + 常数因子
-    # phase_out = np.exp(1j * k0 * zz + 1j * k0 / (2 * zz) * (x2v[np.newaxis, :]**2 + y2v[:, np.newaxis]**2))
-    # Ex2 = Ex2 * phase_out * (dx1 * dy1) / (1j * lambda_m * zz)
-
-    # logger.debug(f"Input power: {np.sum(np.abs(Ex)**2) * dx1 * dy1:.6e}")
-    # logger.debug(f"Output power: {np.sum(np.abs(Ex2)**2) * dx2 * dy2:.6e}")
-    _require_aotools()
-    assert twoStepFresnel is not None
-    Ex2 = twoStepFresnel(Ex, lambda_m, dx1, dx2, zz)
+    # 输出二次相位因子 + 常数因子
+    phase_out = np.exp(1j * k0 * zz + 1j * k0 / (2 * zz) * (x2v[np.newaxis, :]**2 + y2v[:, np.newaxis]**2))
+    Ex2 = Ex2 * phase_out * (dx1 * dy1) / (1j * lambda_m * zz)
 
     return Ex2
 

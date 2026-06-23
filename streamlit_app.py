@@ -986,8 +986,8 @@ def main():
                             width="stretch",
                         )
                 except Exception as e:
-                    st.warning(f"⚠️ 斯特列尔比计算失败（可能缺少 aotools 依赖）: {e}")
-                    st.info("斯特列尔比计算需要 aotools 库。安装方式: pip install aotools")
+                    logger.exception(e)
+                    st.warning(f"⚠️ 斯特列尔比计算失败: {e}")
 
                 # ===== 六、波前像差 — Zernike 分解 =====
                 st.header("六、波前像差 — Zernike 多项式分解")

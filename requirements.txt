@@ -9,4 +9,3 @@ pandas>=2.3.0
 loguru>=0.7.3
 scikit-image>=0.26.0
 singleton-decorator>=1.0.0
-aotools>=1.0.7

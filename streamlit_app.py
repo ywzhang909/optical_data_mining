@@ -1005,6 +1005,8 @@ def main():
                         pupil_denoise,
                         max_order=max_zernike_order,
                         pupil_radius_px=pupil_border["border_radius"],
+                        center_x=pupil_border.get("border_x"),
+                        center_y=pupil_border.get("border_y"),
                     )
                     zernike_coeffs = zernike_result["coeffs"]
                     zernike_noll = zernike_result["noll_map"]

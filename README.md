@@ -17,7 +17,11 @@
 
 ## 在线访问
 
-部署到 [Streamlit Cloud](https://streamlit.io/cloud)（推荐）：
+部署到 [Streamlit Cloud](https://streamlit.io/cloud)：
+
+👉 **在线使用**: [https://opticaldatamining-i2ug6sunezqnmndq6zvn7r.streamlit.app/](https://opticaldatamining-i2ug6sunezqnmndq6zvn7r.streamlit.app/)
+
+自行部署：
 
 1. 将此仓库 fork 或 push 到你的 GitHub
 2. 登录 [share.streamlit.io](https://share.streamlit.io)
@@ -89,7 +93,7 @@ streamlit run streamlit_app.py
 | **BPP** | 光束参数积（Beam Parameter Product） | Axis + Pupil |
 | **M²** | 光束质量因子 | Axis + Pupil |
 | **斯特列尔比** | 能量守恒法 Strehl Ratio | Axis + Pupil |
-| **Zernike 波前** | Zernike 多项式（Noll 归一化）波前像差分解 | Pupil |
+| **Zernike 波前** | Zernike 多项式（Noll 归一化，基于 `zernike` 包）波前像差分解，亚像素平移到包围圆中心后拟合 | Pupil |
 | **3D 可视化** | Plotly 交互式 3D 光强表面 | Axis / Pupil |
 
 ### 参数说明
@@ -102,7 +106,7 @@ streamlit run streamlit_app.py
 - **均匀度边界**：包围圆 / 椭圆 / FTL特征半径 / 二阶矩半径
 - **光学参数**：波长、焦距、入瞳直径
 - **显示单位**：μm / mm / nm 动态切换
-- **Zernike阶数**：4~10阶可配置
+- **Zernike阶数**：4~10阶可配置（使用 `zernike` 包 + 亚像素对齐预处理）
 
 ---
 

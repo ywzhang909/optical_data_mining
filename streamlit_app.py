@@ -27,9 +27,10 @@ import streamlit as st
 from loguru import logger
 from matplotlib.patches import Circle
 
-UI_ROOT = Path(__file__).resolve().parent
-if str(UI_ROOT) not in sys.path:
-    sys.path.insert(0, str(UI_ROOT))
+# 将项目根目录添加到 sys.path（analysis 包位于根目录）
+APP_ROOT = Path(__file__).resolve().parent
+if str(APP_ROOT) not in sys.path:
+    sys.path.insert(0, str(APP_ROOT))
 
 # 导入光束分析模块
 from analysis.image.common import get_profiles  # noqa: E402
@@ -45,6 +46,8 @@ from analysis.optical_analysis import (  # noqa: E402
     read_image_to_numpy,
     shift_to_center_fft,
     subtract_dark_field,
+    fit_zernike,
+    zernike_order_label,
 )
 from analysis.optical_analysis.image_utils import find_spot_border, find_spot_border_energy, ellipse_fit  # noqa: E402
 from analysis.optical_analysis.uniform_analysis import (  # noqa: E402
@@ -64,7 +67,7 @@ plt.rcParams["axes.unicode_minus"] = False
 
 # 配置loguru：移除默认handler，添加INFO级别handler
 logger.remove()
-logger.add(sys.stderr, level="DEBUG")
+logger.add(sys.stderr, level="INFO")
 
 
 def plot_beam_visualization(img, title, pixel_size_um, features):
@@ -811,40 +814,19 @@ def main():
                                           f"{np.nanmax(valid_q):.2f}" if len(valid_q) > 0 else "N/A")
 
                             fig_polar, ax_polar = plt.subplots(figsize=(6, 6), subplot_kw={"projection": "polar"})
-                            ang_theta_rad = np.deg2rad(ang_theta)
-                            display_theta = ang_theta_rad - np.pi
-                            cmap_val = (ang_theta_rad % (2 * np.pi)) / (2 * np.pi)
+                            cmap_val = (ang_theta_arr % (2 * np.pi)) / (2 * np.pi)
                             scatter = ax_polar.scatter(
-                                display_theta, ang_rfl_arr * _unit_factor,
+                                ang_theta_arr, ang_rfl_arr * _unit_factor,
                                 c=cmap_val, cmap="hsv", s=40, alpha=0.8
                             )
-                            ax_polar.set_theta_zero_location("W")
+                            ax_polar.set_theta_zero_location("E")
                             ax_polar.set_theta_direction(-1)
                             ax_polar.set_title(
-                                f"R_FL(θ) 极坐标图 0°=左侧 (n={ftl_n_angles})",
+                                f"R_FL(θ) 极坐标图 (n={ftl_n_angles})",
                                 fontsize=11
                             )
                             plt.tight_layout()
                             st.pyplot(fig_polar)
-
-                            if len(valid_q) > 0:
-                                fig_qpolar, ax_qpolar = plt.subplots(figsize=(6, 6), subplot_kw={"projection": "polar"})
-                                valid_q_mask = ~np.isnan(ang_q_arr)
-                                ang_q_display = ang_q_arr[valid_q_mask]
-                                theta_q_display = display_theta[valid_q_mask]
-                                cmap_q = (ang_theta_rad[valid_q_mask] % (2 * np.pi)) / (2 * np.pi)
-                                scatter_q = ax_qpolar.scatter(
-                                    theta_q_display, ang_q_display,
-                                    c=cmap_q, cmap="hsv", s=40, alpha=0.8
-                                )
-                                ax_qpolar.set_theta_zero_location("W")
-                                ax_qpolar.set_theta_direction(-1)
-                                ax_qpolar.set_title(
-                                    f"q(θ) 极坐标图 0°=左侧 (n={ftl_n_angles})",
-                                    fontsize=11
-                                )
-                                plt.tight_layout()
-                                st.pyplot(fig_qpolar)
 
                             fig_ang, ax_ang = plt.subplots(figsize=(8, 3.5))
                             ax_ang.plot(ang_theta, ang_rfl_arr * _unit_factor, "o-",
@@ -966,42 +948,46 @@ def main():
                 )
 
                 st.header("五、波前质量 — 斯特列尔比 (Strehl Ratio)")
-                strehl, ideal_matched = calculate_strehl_ratio_with_energy_conservation(
-                    pupil_shifted,
-                    axis_shifted,
-                    f_m=3,
-                    wavelength_m=wavelength * 1e-9,
-                    focal_length_m=focal_length * 1e-3,
-                    input_pixel_size=pupil_pixel,
-                    output_pixel_size=axis_pixel,
-                )
-                st.metric("斯特列尔比", f"{strehl:.4f}")
-                if strehl >= 0.8:
-                    st.success("光束质量优秀 (Strehl ≥ 0.8)")
-                elif strehl >= 0.5:
-                    st.warning("光束质量中等 (0.5 ≤ Strehl < 0.8)")
-                else:
-                    st.error("光束质量较差 (Strehl < 0.5)")
+                try:
+                    strehl, ideal_matched = calculate_strehl_ratio_with_energy_conservation(
+                        pupil_shifted,
+                        axis_shifted,
+                        f_m=3,
+                        wavelength_m=wavelength * 1e-9,
+                        focal_length_m=focal_length * 1e-3,
+                        input_pixel_size=pupil_pixel,
+                        output_pixel_size=axis_pixel,
+                    )
+                    st.metric("斯特列尔比", f"{strehl:.4f}")
+                    if strehl >= 0.8:
+                        st.success("光束质量优秀 (Strehl ≥ 0.8)")
+                    elif strehl >= 0.5:
+                        st.warning("光束质量中等 (0.5 ≤ Strehl < 0.8)")
+                    else:
+                        st.error("光束质量较差 (Strehl < 0.5)")
 
-                st.subheader("Strehl 三维重建 — 实际 / 理想 / 光瞳")
-                zmin = min(axis_shifted.min(), ideal_matched.min(), pupil_shifted.min())
-                zmax = max(axis_shifted.max(), ideal_matched.max(), pupil_shifted.max())
-                col_s1, col_s2, col_s3 = st.columns(3)
-                with col_s1:
-                    st.plotly_chart(
-                        plot_3d_visualization(axis_shifted, "实际焦斑", zmin, zmax),
-                        width="stretch",
-                    )
-                with col_s2:
-                    st.plotly_chart(
-                        plot_3d_visualization(ideal_matched, "理想焦斑", zmin, zmax),
-                        width="stretch",
-                    )
-                with col_s3:
-                    st.plotly_chart(
-                        plot_3d_visualization(pupil_shifted, "光瞳", zmin, zmax),
-                        width="stretch",
-                    )
+                    st.subheader("Strehl 三维重建 — 实际 / 理想 / 光瞳")
+                    zmin = min(axis_shifted.min(), ideal_matched.min(), pupil_shifted.min())
+                    zmax = max(axis_shifted.max(), ideal_matched.max(), pupil_shifted.max())
+                    col_s1, col_s2, col_s3 = st.columns(3)
+                    with col_s1:
+                        st.plotly_chart(
+                            plot_3d_visualization(axis_shifted, "实际焦斑", zmin, zmax),
+                            width="stretch",
+                        )
+                    with col_s2:
+                        st.plotly_chart(
+                            plot_3d_visualization(ideal_matched, "理想焦斑", zmin, zmax),
+                            width="stretch",
+                        )
+                    with col_s3:
+                        st.plotly_chart(
+                            plot_3d_visualization(pupil_shifted, "光瞳", zmin, zmax),
+                            width="stretch",
+                        )
+                except Exception as e:
+                    st.warning(f"⚠️ 斯特列尔比计算失败（可能缺少 aotools 依赖）: {e}")
+                    st.info("斯特列尔比计算需要 aotools 库。安装方式: pip install aotools")
 
                 # ===== 六、波前像差 — Zernike 分解 =====
                 st.header("六、波前像差 — Zernike 多项式分解")

@@ -32,3 +32,26 @@ doc/ao/*.png
 tests/**/*.png
 output*
 .history*
+
+# Agents / AI tooling
+.agents/
+
+# Environment & secrets
+.env
+.env.*
+
+# Legacy directories (not part of streamlit-cloud deployment)
+src/
+docs/
+notebooks/
+tests/
+ui/
+pyproject.toml
+skills-lock.json
+AGENTS.md
+"UV配置说明.md"
+.gitattributes
+.github/
+
+# Streamlit runtime
+.streamlit/secrets.toml

@@ -72,6 +72,7 @@ from .zernike_analysis import (
     fit_zernike,
     make_zernike_grid,
     recommend_zernike_order,
+    zernike_order_label,
 )
 
 # 可视化模块
@@ -117,6 +118,7 @@ __all__ = [
     "fit_zernike",
     "make_zernike_grid",
     "recommend_zernike_order",
+    "zernike_order_label",
     # beam_analysis_metrics
     "BeamAnalysisMetrics",
     # history_manager

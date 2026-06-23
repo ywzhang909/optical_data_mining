@@ -10,7 +10,7 @@
 """
 import math
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 import cv2
 import numpy as np
@@ -630,6 +630,118 @@ def _fallback_moments(image: np.ndarray, return_mask: bool) -> dict:
     if return_mask:
         result['mask'] = np.zeros_like(image, dtype=np.uint8)
     return result
+
+
+def collect_available_boundaries(
+    pupil_denoise: np.ndarray,
+    pupil_border: dict[str, float],
+    pupil_features: dict[str, float],
+    pupil_pixel: float,
+    pupil_ellipse: dict | None = None,
+    pupil_ftl_result: dict | None = None,
+    pupil_type: str | None = None,
+    manual_center_x: float | None = None,
+    manual_center_y: float | None = None,
+    manual_radius: float | None = None,
+) -> list[dict[str, Any]]:
+    """
+    收集所有可用的边界类型为统一列表，消除重复构造逻辑。
+
+    Parameters
+    ----------
+    pupil_denoise : np.ndarray
+        去暗场后的光瞳图像。
+    pupil_border : dict
+        包含 'border_x', 'border_y', 'border_radius'。
+    pupil_features : dict
+        包含 'center_x', 'center_y', 'avg_diameter'。
+    pupil_pixel : float
+        像素尺寸（米）。
+    pupil_ellipse : dict | None
+        ellipse_fit() 的返回结果（可选）。为 None 时内部调用 find_spot_border_energy。
+    pupil_ftl_result : dict | None
+        fit_flat_topped_lorentz() 返回结果（可选）。
+    pupil_type : str | None
+        "平顶光 (Flat-Top)" 或 "高斯光 (Gaussian)"。
+    manual_center_x/y/radius : float | None
+        手动输入边界。
+
+    Returns
+    -------
+    list[dict]
+        每个 dict 含 label, cx, cy, radius, color, linestyle。
+    """
+    boundaries: list[dict[str, Any]] = []
+
+    # 1. 包围圆 — 始终可用
+    boundaries.append({
+        "label": "包围圆",
+        "cx": pupil_border["border_x"],
+        "cy": pupil_border["border_y"],
+        "radius": pupil_border["border_radius"],
+        "color": "yellow",
+        "linestyle": "-.",
+    })
+
+    # 2. 椭圆 — 优先使用已计算的 ellipse_fit 结果，否则回退到能量法
+    if pupil_ellipse is not None and not np.isnan(pupil_ellipse.get("short_axis", np.nan)):
+        boundaries.append({
+            "label": "椭圆",
+            "cx": pupil_ellipse["ellipse_center_x"],
+            "cy": pupil_ellipse["ellipse_center_y"],
+            "radius": np.sqrt(pupil_ellipse["short_axis"] * pupil_ellipse["long_axis"]) / 2.0,
+            "color": "lime",
+            "linestyle": "--",
+        })
+    else:
+        try:
+            eb = find_spot_border_energy(pupil_denoise, edge_method="ellipse")
+            boundaries.append({
+                "label": "椭圆",
+                "cx": eb["border_x"],
+                "cy": eb["border_y"],
+                "radius": eb["border_radius"],
+                "color": "lime",
+                "linestyle": "--",
+            })
+        except Exception:
+            pass
+
+    # 3. 二阶矩半径 — 始终可计算
+    pixel_size_um_pupil = pupil_pixel * 1e6
+    radius_2m = pupil_features["avg_diameter"] / pixel_size_um_pupil / 2.0
+    boundaries.append({
+        "label": "二阶矩",
+        "cx": pupil_features["center_x"],
+        "cy": pupil_features["center_y"],
+        "radius": radius_2m,
+        "color": "orange",
+        "linestyle": ":",
+    })
+
+    # 4. FTL 特征半径 — 仅平顶光模式且拟合成功
+    if pupil_type == "平顶光 (Flat-Top)" and pupil_ftl_result is not None and pupil_ftl_result.get("success"):
+        boundaries.append({
+            "label": "FTL",
+            "cx": pupil_features["center_x"],
+            "cy": pupil_features["center_y"],
+            "radius": pupil_ftl_result["R_FL_pixels"],
+            "color": "magenta",
+            "linestyle": "-",
+        })
+
+    # 5. 手动输入
+    if manual_center_x is not None and manual_center_y is not None and manual_radius is not None:
+        boundaries.append({
+            "label": f"手动({manual_center_x:.0f},{manual_center_y:.0f})",
+            "cx": manual_center_x,
+            "cy": manual_center_y,
+            "radius": manual_radius,
+            "color": "red",
+            "linestyle": "-",
+        })
+
+    return boundaries
 
 
 def ellipse_fit(uint8_image: np.ndarray) -> dict:

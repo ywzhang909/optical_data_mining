@@ -8,6 +8,7 @@ from .beam_visualization import (
 )
 from .renderers import (
     plot_beam_visualization,
+    plot_energy_pie,
     plot_gaussian_cross_section,
     plot_ftl_polar,
     plot_ftl_angular,
@@ -24,6 +25,7 @@ __all__ = [
     "plot_3d_visualization",
     "plot_multiple_beams_3d",
     "plot_beam_visualization",
+    "plot_energy_pie",
     "plot_gaussian_cross_section",
     "plot_ftl_polar",
     "plot_ftl_angular",

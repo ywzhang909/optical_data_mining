@@ -47,18 +47,24 @@ from analysis.optical_analysis import (  # noqa: E402
     fit_zernike,
     zernike_order_label,
 )
-from analysis.optical_analysis.image_utils import find_spot_border, find_spot_border_energy, ellipse_fit  # noqa: E402
+from analysis.optical_analysis.beam_analysis import compute_encircled_energy  # noqa: E402
+from analysis.optical_analysis.image_utils import (  # noqa: E402
+    collect_available_boundaries,
+    ellipse_fit,
+    find_spot_border,
+)
 from analysis.optical_analysis.uniform_analysis import (  # noqa: E402
     calculate_uniformity_metrics,
     plot_uniformity_analysis,
 )
 from analysis.optical_analysis.visualization import (  # noqa: E402
-    plot_beam_visualization,
     plot_3d_visualization,
-    plot_gaussian_cross_section,
-    plot_ftl_polar,
+    plot_beam_visualization,
+    plot_energy_pie,
     plot_ftl_angular,
+    plot_ftl_polar,
     plot_ftl_q_polar,
+    plot_gaussian_cross_section,
     plot_zernike_barchart,
 )
 
@@ -444,65 +450,27 @@ def main():
                     )
 
                 # ----- 能量指标：峰值光强、总能量、能量集中度 -----
-                _peak_intensity = float(np.max(pupil_denoise))
-                _total_energy = float(np.sum(pupil_denoise))
-                # 围困能量曲线：按径向距离排序计算累计能量占比
-                _cx = pupil_features["center_x"]
-                _cy = pupil_features["center_y"]
-                _h_p, _w_p = pupil_denoise.shape
-                _y_i, _x_i = np.indices((_h_p, _w_p))
-                _R = np.sqrt((_x_i - _cx) ** 2 + (_y_i - _cy) ** 2)
-                _sort_idx = np.argsort(_R.ravel())
-                _sorted_R = _R.ravel()[_sort_idx]
-                _sorted_E = pupil_denoise.ravel()[_sort_idx]
-                _cum_E = np.cumsum(_sorted_E)
-                _cum_norm = _cum_E / _cum_E[-1] if _cum_E[-1] > 0 else _cum_E
-                # 提取关键能量占比对应半径
-                _r50 = _sorted_R[np.searchsorted(_cum_norm, 0.50)] if np.searchsorted(_cum_norm, 0.50) < len(_sorted_R) else np.nan
-                _r80 = _sorted_R[np.searchsorted(_cum_norm, 0.80)] if np.searchsorted(_cum_norm, 0.80) < len(_sorted_R) else np.nan
-                _r95 = _sorted_R[np.searchsorted(_cum_norm, 0.95)] if np.searchsorted(_cum_norm, 0.95) < len(_sorted_R) else np.nan
+                ee = compute_encircled_energy(
+                    pupil_denoise,
+                    pupil_features["center_x"],
+                    pupil_features["center_y"],
+                )
+                peak_intensity = ee["peak_intensity"]
+                total_energy = ee["total_energy"]
+                r50 = ee["r_fraction"].get("r50", np.nan)
+                r80 = ee["r_fraction"].get("r80", np.nan)
+                r95 = ee["r_fraction"].get("r95", np.nan)
 
                 col_em1, col_em2 = st.columns([1, 1])
                 with col_em1:
-                    st.metric("峰值光强", f"{_peak_intensity:.2f}",
+                    st.metric("峰值光强", f"{peak_intensity:.2f}",
                               help="光斑内像素强度最大值，反映信号峰值水平。")
                 with col_em2:
-                    st.metric("总能量", f"{_total_energy:.2e}",
+                    st.metric("总能量", f"{total_energy:.2e}",
                               help="光斑内像素强度总和，反映光束总功率的相对值。")
-                # 能量集中度饼图：按径向分区展示能量占比
-                _ring_labels = []
-                _ring_sizes = []
-                _ring_colors = []
-                if not np.isnan(_r50) and not np.isnan(_r80) and not np.isnan(_r95):
-                    # 查找径向环对应累计能量端点
-                    _idx_r50 = np.searchsorted(_cum_norm, 0.50)
-                    _idx_r80 = np.searchsorted(_cum_norm, 0.80)
-                    _idx_r95 = np.searchsorted(_cum_norm, 0.95)
-                    # 环内能量 = 端点累计差
-                    _e50 = _cum_norm[_idx_r50] if _idx_r50 < len(_cum_norm) else 0.50  # ≈ 0.50
-                    _e80 = _cum_norm[_idx_r80] - _cum_norm[_idx_r50] if _idx_r80 < len(_cum_norm) else 0.30
-                    _e95 = _cum_norm[_idx_r95] - _cum_norm[_idx_r80] if _idx_r95 < len(_cum_norm) else 0.15
-                    _erem = 1.0 - _e50 - _e80 - _e95 if _e50 + _e80 + _e95 < 1.0 else 0.0
-                    _ring_labels = [
-                        f"核心\n(r≤{_r50:.0f}px)\n{_e50*100:.0f}%",
-                        f"内环\n({_r50:.0f}<r≤{_r80:.0f}px)\n{_e80*100:.0f}%",
-                        f"外环\n({_r80:.0f}<r≤{_r95:.0f}px)\n{_e95*100:.0f}%",
-                        f"边缘\n(r>{_r95:.0f}px)\n{_erem*100:.0f}%",
-                    ]
-                    _ring_sizes = [_e50, _e80, _e95, _erem]
-                    _ring_colors = ["#e74c3c", "#f39c12", "#3498db", "#95a5a6"]
-                else:
-                    _ring_labels = ["N/A"]
-                    _ring_sizes = [1.0]
-                    _ring_colors = ["#bdc3c7"]
-                _fig_pie, _ax_pie = plt.subplots(figsize=(4.5, 3.5))
-                _ax_pie.pie(
-                    _ring_sizes, labels=_ring_labels, colors=_ring_colors,
-                    startangle=90, textprops={"fontsize": 8},
-                    wedgeprops={"linewidth": 1, "edgecolor": "white"},
+                st.pyplot(
+                    plot_energy_pie(ee["cum_norm"], ee["sorted_R"], r50, r80, r95)
                 )
-                _ax_pie.set_title("能量集中度 η(r) — 径向能量环分布", fontsize=10)
-                st.pyplot(_fig_pie)
 
                 # ===== 二、形状分析：椭圆拟合 =====
                 st.subheader("二、形状分析 — 椭圆拟合")
@@ -527,54 +495,23 @@ def main():
                               help="椭圆轮廓内 std/mean，越小越均匀。")
 
                     # ----- 边界类型对比图（光瞳 + 所有边界圆） -----
-                    _pixel_size_um = pupil_pixel * 1e6
-                    _r2m = pupil_features["avg_diameter"] / _pixel_size_um / 2.0
-                    _shape_boundaries: list[dict] = [
-                        {
-                            "label": "包围圆",
-                            "cx": pupil_border["border_x"],
-                            "cy": pupil_border["border_y"],
-                            "radius": pupil_border["border_radius"],
-                            "color": "yellow",
-                            "linestyle": "-.",
-                        },
-                        {
-                            "label": "椭圆",
-                            "cx": pupil_ellipse["ellipse_center_x"],
-                            "cy": pupil_ellipse["ellipse_center_y"],
-                            "radius": np.sqrt(pupil_ellipse["short_axis"] * pupil_ellipse["long_axis"]) / 2.0,
-                            "color": "lime",
-                            "linestyle": "--",
-                        },
-                        {
-                            "label": "二阶矩",
-                            "cx": pupil_features["center_x"],
-                            "cy": pupil_features["center_y"],
-                            "radius": _r2m,
-                            "color": "orange",
-                            "linestyle": ":",
-                        },
-                    ]
-                    if manual_center_x is not None and manual_center_y is not None and manual_radius is not None:
-                        _shape_boundaries.append({
-                            "label": f"手动({manual_center_x:.0f},{manual_center_y:.0f})",
-                            "cx": manual_center_x,
-                            "cy": manual_center_y,
-                            "radius": manual_radius,
-                            "color": "red",
-                            "linestyle": "-",
-                        })
-                    _border_ok = not any(np.isnan(v) for v in (
+                    pixel_size_um_pupil = pupil_pixel * 1e6
+                    boundaries_initial = collect_available_boundaries(
+                        pupil_denoise, pupil_border, pupil_features, pupil_pixel,
+                        pupil_ellipse=pupil_ellipse, manual_center_x=manual_center_x,
+                        manual_center_y=manual_center_y, manual_radius=manual_radius,
+                    )
+                    border_ok = not any(np.isnan(v) for v in (
                         pupil_border["border_x"], pupil_border["border_y"], pupil_border["border_radius"]))
-                    if _border_ok:
-                        _fig = plot_beam_visualization(pupil_img, "Pupil", _pixel_size_um, pupil_features)
-                        for _b in _shape_boundaries:
-                            _fig.axes[0].add_patch(
-                                Circle((_b["cx"], _b["cy"]), radius=_b["radius"],
-                                       fill=False, color=_b["color"], linewidth=1.5, linestyle=_b["linestyle"],
-                                       label=f"{_b['label']} (c=({_b['cx']:.0f},{_b['cy']:.0f}), r={_b['radius']:.1f}px)"))
-                        _fig.axes[0].legend(loc="upper right", fontsize=8)
-                        st.pyplot(_fig)
+                    if border_ok:
+                        fig_shape = plot_beam_visualization(pupil_img, "Pupil", pixel_size_um_pupil, pupil_features)
+                        for entry in boundaries_initial:
+                            fig_shape.axes[0].add_patch(
+                                Circle((entry["cx"], entry["cy"]), radius=entry["radius"],
+                                       fill=False, color=entry["color"], linewidth=1.5, linestyle=entry["linestyle"],
+                                       label=f"{entry['label']} (c=({entry['cx']:.0f},{entry['cy']:.0f}), r={entry['radius']:.1f}px)"))
+                        fig_shape.axes[0].legend(loc="upper right", fontsize=8)
+                        st.pyplot(fig_shape)
                     else:
                         st.warning("⚠️ 包围圆检测失败，无法绘制边界对比图。")
                 else:
@@ -652,88 +589,34 @@ def main():
                     else:
                         st.warning(f"⚠️ FTL 拟合失败: {pupil_ftl_result['message']}")
 
-                # ===== 计算所有可用边界类型（用于可视化对比） =====
-                all_boundaries: list[dict] = []
-
-                # 1. 包围圆 — 始终可用
-                all_boundaries.append({
-                    "label": "包围圆",
-                    "cx": pupil_border["border_x"],
-                    "cy": pupil_border["border_y"],
-                    "radius": pupil_border["border_radius"],
-                    "color": "yellow",
-                    "linestyle": "-.",
-                })
-
-                # 2. 椭圆 — 始终可计算
-                try:
-                    energy_border = find_spot_border_energy(pupil_denoise, edge_method="ellipse")
-                    all_boundaries.append({
-                        "label": "椭圆",
-                        "cx": energy_border["border_x"],
-                        "cy": energy_border["border_y"],
-                        "radius": energy_border["border_radius"],
-                        "color": "lime",
-                        "linestyle": "--",
-                    })
-                except Exception:
-                    pass
-
-                # 3. 二阶矩半径 — 始终可计算
-                pixel_size_um_pupil = pupil_pixel * 1e6
-                radius_2m = pupil_features["avg_diameter"] / pixel_size_um_pupil / 2.0
-                all_boundaries.append({
-                    "label": "二阶矩",
-                    "cx": pupil_features["center_x"],
-                    "cy": pupil_features["center_y"],
-                    "radius": radius_2m,
-                    "color": "orange",
-                    "linestyle": ":",
-                })
-
-                # 4. FTL 特征半径 — 仅平顶光模式且拟合成功
-                if pupil_type == "平顶光 (Flat-Top)" and pupil_ftl_result is not None and pupil_ftl_result.get("success"):
-                    all_boundaries.append({
-                        "label": "FTL",
-                        "cx": pupil_features["center_x"],
-                        "cy": pupil_features["center_y"],
-                        "radius": pupil_ftl_result["R_FL_pixels"],
-                        "color": "magenta",
-                        "linestyle": "-",
-                    })
-
-                # 5. 手动输入 — 仅用户提供了有效值
-                if manual_center_x is not None and manual_center_y is not None and manual_radius is not None:
-                    all_boundaries.append({
-                        "label": f"手动({manual_center_x:.0f},{manual_center_y:.0f})",
-                        "cx": manual_center_x,
-                        "cy": manual_center_y,
-                        "radius": manual_radius,
-                        "color": "red",
-                        "linestyle": "-",
-                    })
+                # ===== 统一收集所有可用边界类型 =====
+                all_boundaries = collect_available_boundaries(
+                    pupil_denoise, pupil_border, pupil_features, pupil_pixel,
+                    pupil_ftl_result=pupil_ftl_result, pupil_type=pupil_type,
+                    manual_center_x=manual_center_x, manual_center_y=manual_center_y,
+                    manual_radius=manual_radius,
+                )
 
                 # ===== 根据所选边界类型设置 uniformity_border =====
                 uniformity_border = dict(pupil_border)
                 if pupil_type == "平顶光 (Flat-Top)":
-                    if uniformity_boundary_type == "包围椭圆 (Ellipse)":
-                        eb = next((b for b in all_boundaries if b["label"] == "椭圆"), None)
-                        if eb is not None:
-                            uniformity_border["border_radius"] = eb["radius"]
-                    elif uniformity_boundary_type == "FTL 特征半径":
-                        eb = next((b for b in all_boundaries if b["label"] == "FTL"), None)
-                        if eb is not None:
-                            uniformity_border["border_radius"] = eb["radius"]
-                        else:
-                            st.warning("⚠️ FTL 拟合未成功，均匀度边界回退到包围圆半径")
-                    elif uniformity_boundary_type == "二阶矩半径 (2nd moment)":
-                        eb = next((b for b in all_boundaries if b["label"] == "二阶矩"), None)
-                        if eb is not None:
-                            uniformity_border["border_radius"] = eb["radius"]
-                    elif uniformity_boundary_type == "手动输入 (Manual)":
+                    mapping = {
+                        "包围椭圆 (Ellipse)": "椭圆",
+                        "FTL 特征半径": "FTL",
+                        "二阶矩半径 (2nd moment)": "二阶矩",
+                        "手动输入 (Manual)": "手动",
+                    }
+                    match_prefix = mapping.get(uniformity_boundary_type, "")
+                    eb = None
+                    if match_prefix == "手动":
                         eb = next((b for b in all_boundaries if b["label"].startswith("手动")), None)
-                        if eb is not None:
-                            uniformity_border["border_radius"] = eb["radius"]
+                    elif match_prefix:
+                        eb = next((b for b in all_boundaries if b["label"] == match_prefix), None)
+                        if match_prefix == "FTL" and eb is None:
+                            st.warning("⚠️ FTL 拟合未成功，均匀度边界回退到包围圆半径")
+                    if eb is not None:
+                        uniformity_border["border_radius"] = eb["radius"]
+                        if match_prefix == "手动":
                             uniformity_border["border_x"] = eb["cx"]
                             uniformity_border["border_y"] = eb["cy"]
 

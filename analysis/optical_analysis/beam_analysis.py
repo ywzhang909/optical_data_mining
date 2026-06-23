@@ -701,3 +701,58 @@ def extract_beam_features(
         "pib_overexposed": is_overexposed,
         "gaussian_diameter": gaussian_dia,
     }
+
+
+def compute_encircled_energy(
+    image: np.ndarray,
+    cx: float,
+    cy: float,
+    fractions: tuple[float, ...] = (0.50, 0.80, 0.95),
+) -> dict[str, Any]:
+    """
+    计算围困能量 (encircled energy) 曲线及关键半径。
+
+    对图像中每个像素按距 (cx, cy) 的径向距离排序，
+    计算累计能量占比，并提取指定能量占比对应的半径。
+
+    Args:
+        image: 二维光强图像。
+        cx, cy: 中心坐标（像素）。
+        fractions: 需提取的能量占比序列，默认 (0.50, 0.80, 0.95)。
+
+    Returns:
+        dict 包含:
+            - r_fraction: dict，每个 fraction → 对应半径（像素）
+            - sorted_R:   ndarray，按径向距离排序后的半径序列
+            - cum_norm:   ndarray，对应的累计归一化能量 (0→1)
+            - peak_intensity: float，像素最大强度
+            - total_energy:   float，像素强度总和
+    """
+    img = np.asarray(image, dtype=np.float64)
+    h, w = img.shape
+    y_i, x_i = np.indices((h, w))
+    R = np.sqrt((x_i - cx) ** 2 + (y_i - cy) ** 2)
+
+    sort_idx = np.argsort(R.ravel())
+    sorted_R = R.ravel()[sort_idx]
+    sorted_E = img.ravel()[sort_idx]
+
+    cum_E = np.cumsum(sorted_E)
+    total = cum_E[-1]
+    cum_norm = cum_E / total if total > 0 else cum_E
+
+    r_fraction: dict[str, float] = {}
+    for frac in fractions:
+        idx = np.searchsorted(cum_norm, frac)
+        if idx < len(sorted_R):
+            r_fraction[f"r{int(frac * 100)}"] = float(sorted_R[idx])
+        else:
+            r_fraction[f"r{int(frac * 100)}"] = np.nan
+
+    return {
+        "r_fraction": r_fraction,
+        "sorted_R": sorted_R,
+        "cum_norm": cum_norm,
+        "peak_intensity": float(np.max(img)),
+        "total_energy": float(total),
+    }

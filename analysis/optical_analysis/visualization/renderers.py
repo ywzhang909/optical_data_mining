@@ -315,6 +315,70 @@ def plot_zernike_barchart(
     return fig_bar
 
 
+def plot_energy_pie(
+    cum_norm: np.ndarray,
+    sorted_R: np.ndarray,
+    r50: float,
+    r80: float,
+    r95: float,
+) -> plt.Figure:
+    """
+    Plot energy concentration η(r) as a radial ring pie chart.
+
+    Parameters
+    ----------
+    cum_norm : np.ndarray
+        Normalised cumulative energy (0→1) sorted by radius.
+    sorted_R : np.ndarray
+        Radius values corresponding to each cum_norm entry.
+    r50, r80, r95 : float
+        Radii containing 50 %, 80 %, 95 % of total energy.
+
+    Returns
+    -------
+    plt.Figure
+        Matplotlib pie chart figure.
+    """
+    import math
+
+    if np.isnan(r50) or np.isnan(r80) or np.isnan(r95):
+        # Fallback: single grey slice
+        fig_pie, ax_pie = plt.subplots(figsize=(4.5, 3.5))
+        ax_pie.pie([1.0], labels=["N/A"], colors=["#bdc3c7"],
+                   startangle=90, textprops={"fontsize": 8},
+                   wedgeprops={"linewidth": 1, "edgecolor": "white"})
+        ax_pie.set_title("Energy concentration η(r) — radial ring distribution", fontsize=10)
+        return fig_pie
+
+    idx50 = np.searchsorted(cum_norm, 0.50)
+    idx80 = np.searchsorted(cum_norm, 0.80)
+    idx95 = np.searchsorted(cum_norm, 0.95)
+
+    e50 = cum_norm[min(idx50, len(cum_norm) - 1)]
+    e80 = cum_norm[min(idx80, len(cum_norm) - 1)] - e50 if idx80 < len(cum_norm) else 0.30
+    e95 = cum_norm[min(idx95, len(cum_norm) - 1)] - cum_norm[min(idx80, len(cum_norm) - 1)] if idx95 < len(cum_norm) else 0.15
+    erem = max(0.0, 1.0 - e50 - e80 - e95)
+
+    sizes = [e50, e80, e95, erem]
+    labels = [
+        f"Core\n(r≤{r50:.0f}px)\n{e50 * 100:.0f}%",
+        f"Inner\n({r50:.0f}<r≤{r80:.0f}px)\n{e80 * 100:.0f}%",
+        f"Outer\n({r80:.0f}<r≤{r95:.0f}px)\n{e95 * 100:.0f}%",
+        f"Rim\n(r>{r95:.0f}px)\n{erem * 100:.0f}%",
+    ]
+    colors = ["#e74c3c", "#f39c12", "#3498db", "#95a5a6"]
+
+    fig_pie, ax_pie = plt.subplots(figsize=(4.5, 3.5))
+    ax_pie.pie(
+        sizes, labels=labels, colors=colors,
+        startangle=90, textprops={"fontsize": 8},
+        wedgeprops={"linewidth": 1, "edgecolor": "white"},
+    )
+    ax_pie.set_title("Energy concentration η(r) — radial ring distribution", fontsize=10)
+    plt.tight_layout()
+    return fig_pie
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------

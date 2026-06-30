@@ -91,8 +91,25 @@ def calculate_uniformity_metrics(
         pv = np.nan
         energy_uniformity = np.nan
 
-    profile_x = img[int(round(cy)), :]
-    profile_y = img[:, int(round(cx))]
+    # X profile (horizontal through center, only within bounding circle)
+    x_start = max(0, int(np.floor(cx - radius)))
+    x_end = min(w, int(np.ceil(cx + radius)) + 1)
+    profile_x = img[int(round(cy)), x_start:x_end]
+    profile_x_idx = np.arange(x_start, x_end)
+
+    # Y profile (vertical through center, only within bounding circle)
+    y_start = max(0, int(np.floor(cy - radius)))
+    y_end = min(h, int(np.ceil(cy + radius)) + 1)
+    profile_y = img[y_start:y_end, int(round(cx))]
+    profile_y_idx = np.arange(y_start, y_end)
+
+    # RMS non-uniformity for each cross-section
+    profile_x = np.asarray(profile_x, dtype=np.float64)
+    profile_y = np.asarray(profile_y, dtype=np.float64)
+    mu_x = float(np.mean(profile_x)) if profile_x.size > 0 else np.nan
+    mu_y = float(np.mean(profile_y)) if profile_y.size > 0 else np.nan
+    rms_x = float(np.std(profile_x)) / mu_x if (profile_x.size > 0 and mu_x > 0) else np.nan
+    rms_y = float(np.std(profile_y)) / mu_y if (profile_y.size > 0 and mu_y > 0) else np.nan
 
     return {
         "cx": cx,
@@ -101,10 +118,14 @@ def calculate_uniformity_metrics(
         "mean_intensity": mean_intensity,
         "std_intensity": std_intensity,
         "rms_uniformity": rms_uniformity,
+        "rms_x": rms_x,
+        "rms_y": rms_y,
         "pv": pv,
         "energy_uniformity": energy_uniformity,
         "profile_x": profile_x,
         "profile_y": profile_y,
+        "profile_x_idx": profile_x_idx,
+        "profile_y_idx": profile_y_idx,
         "mask": mask,
     }
 
@@ -146,32 +167,40 @@ def plot_uniformity_analysis(
     ax.set_title(f"Bounding circle ({radius:.1f} px)")
     fig.colorbar(im, ax=ax, shrink=0.8)
 
-    # 2) XY profile
+    # 2) XY profile (only within bounding circle)
     ax = axes[1]
     profile_x = metrics["profile_x"]
     profile_y = metrics["profile_y"]
+    profile_x_idx = metrics.get("profile_x_idx")
+    profile_y_idx = metrics.get("profile_y_idx")
     mean_intensity = metrics.get("mean_intensity", np.nan)
-    if isinstance(profile_x, np.ndarray):
-        ax.plot(
-            np.arange(profile_x.shape[0]),
-            profile_x,
-            label="X profile",
-            color="tab:blue",
-        )
-    if isinstance(profile_y, np.ndarray):
-        ax.plot(
-            np.arange(profile_y.shape[0]),
-            profile_y,
-            label="Y profile",
-            color="tab:green",
-        )
+    if isinstance(profile_x, np.ndarray) and isinstance(profile_x_idx, np.ndarray):
+        ax.plot(profile_x_idx, profile_x, label="X profile", color="tab:blue")
+    elif isinstance(profile_x, np.ndarray):
+        ax.plot(np.arange(profile_x.shape[0]), profile_x, label="X profile", color="tab:blue")
+    if isinstance(profile_y, np.ndarray) and isinstance(profile_y_idx, np.ndarray):
+        ax.plot(profile_y_idx, profile_y, label="Y profile", color="tab:green")
+    elif isinstance(profile_y, np.ndarray):
+        ax.plot(np.arange(profile_y.shape[0]), profile_y, label="Y profile", color="tab:green")
     if isinstance(mean_intensity, (int, float, np.floating)) and not math.isnan(
         mean_intensity
     ):
         ax.axhline(
             float(mean_intensity), color="gray", linestyle="--", label="Circle mean"
         )
-    ax.set_title("XY cross-section")
+    # Annotate cross-section RMS non-uniformity
+    rms_x = metrics.get("rms_x", np.nan)
+    rms_y = metrics.get("rms_y", np.nan)
+    rms_label = []
+    if isinstance(rms_x, (int, float)) and not math.isnan(rms_x):
+        rms_label.append(f"X RMS: {rms_x:.4f}")
+    if isinstance(rms_y, (int, float)) and not math.isnan(rms_y):
+        rms_label.append(f"Y RMS: {rms_y:.4f}")
+    if rms_label:
+        ax.text(0.02, 0.98, "  ".join(rms_label), transform=ax.transAxes,
+                fontsize=9, color="black", ha="left", va="top",
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
+    ax.set_title("XY cross-section (within circle)")
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
 

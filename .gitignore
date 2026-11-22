@@ -32,3 +32,6 @@ doc/ao/*.png
 tests/**/*.png
 output*
 .history*
+graphify*
+CLAUDE.md
+.claude*

@@ -12,14 +12,15 @@ ui/
 │   ├── image/
 │   │   ├── __init__.py
 │   │   └── common.py             # Image I/O, feature extraction
-│   └── optical_analysis/
-│       ├── __init__.py
-│       ├── beam_analysis.py      # D4σ, PIB, Gaussian fitting, BPP, M²
-│       ├── beam_analysis_metrics.py  # BeamAnalysisMetrics class
-│       ├── diffraction.py        # Fresnel propagation, Strehl ratio
-│       ├── history_manager.py    # Analysis session persistence
-│       ├── image_utils.py        # Image read, dark field subtraction
-│       └── visualization/        # 2D/3D Plotly visualizations
+│   ├── optical_analysis/
+│   │   ├── __init__.py
+│   │   ├── beam_analysis.py      # D4σ, PIB, Gaussian fitting, BPP, M²
+│   │   ├── beam_analysis_metrics.py  # BeamAnalysisMetrics class
+│   │   ├── diffraction.py        # Fresnel propagation, Strehl ratio
+│   │   ├── history_manager.py    # Analysis session persistence
+│   │   ├── image_utils.py        # Image read, dark field subtraction
+│   │   └── visualization/        # 2D/3D Plotly visualizations
+│   └── thermo/                   # 温度脉动仪数据分析与中文报告（`python -m ui.analysis.thermo`）
 ├── server/
 │   ├── main.py                   # FastAPI app entry point
 │   └── state.py                  # Pipeline state management
@@ -37,6 +38,7 @@ ui/
 | Beam quality calculation | analysis/optical_analysis/beam_analysis.py | d4sigma, pib_ratio, bpp, m2 |
 | Strehl ratio | analysis/optical_analysis/diffraction.py | Energy-conservation method |
 | Image I/O | analysis/image/common.py | read_tiff_to_numpy, get_profiles |
+| 温度脉动仪报告 | analysis/thermo/ | `python -m ui.analysis.thermo`；用法见 `docs/温度脉动仪数据报告.md`；含 `channels.py`（环境要素）、`filters.py`（抖动剔除/平滑）、`slices.py`（时间片导出） |
 | Analysis metrics class | analysis/optical_analysis/beam_analysis_metrics.py | Orchestrates all calculations |
 | Session history | analysis/optical_analysis/history_manager.py | Save/load analysis results |
 

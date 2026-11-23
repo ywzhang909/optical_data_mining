@@ -41,6 +41,7 @@ from .config import (
     ProbeConfig,
     QualityConfig,
     ReportConfig,
+    SpatialConfig,
     ThermoReportConfig,
 )
 from .discovery import Inventory, SourceFile, discover
@@ -55,6 +56,15 @@ from .metrics import (
 from .pipeline import AnalysisResult, analyze, build
 from .report import write_report
 from .slices import build_slice_frame, write_slices
+from .spatial import (
+    aggregate_across_probes,
+    daily_spatial_summary,
+    equal_interval_mean,
+    heights_from_text,
+    spatial_series,
+    spatial_summary,
+    write_spatial,
+)
 
 __version__ = "0.1.0"
 
@@ -71,8 +81,10 @@ __all__ = [
     "QualityConfig",
     "ReportConfig",
     "SourceFile",
+    "SpatialConfig",
     "ThermoReportConfig",
     "__version__",
+    "aggregate_across_probes",
     "analyze",
     "anomaly_correlation",
     "build",
@@ -80,15 +92,20 @@ __all__ = [
     "cn2_from_ct2",
     "ct2_from_structure",
     "daily_mean_series",
+    "daily_spatial_summary",
     "diurnal_profile",
     "discover",
     "ensemble_spread",
+    "equal_interval_mean",
+    "heights_from_text",
     "jitter_mask",
     "load_channels",
     "moving_average",
     "probe_day_summary",
     "probe_overall_summary",
     "smooth_minute_frame",
+    "spatial_series",
+    "spatial_summary",
     "structure_function",
     "structure_noise_floor",
     "structure_slope",
@@ -96,4 +113,5 @@ __all__ = [
     "turbulence_summary",
     "write_report",
     "write_slices",
+    "write_spatial",
 ]

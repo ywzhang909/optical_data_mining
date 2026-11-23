@@ -38,7 +38,7 @@ ui/
 | Beam quality calculation | analysis/optical_analysis/beam_analysis.py | d4sigma, pib_ratio, bpp, m2 |
 | Strehl ratio | analysis/optical_analysis/diffraction.py | Energy-conservation method |
 | Image I/O | analysis/image/common.py | read_tiff_to_numpy, get_profiles |
-| 温度脉动仪报告 | analysis/thermo/ | `python -m ui.analysis.thermo`；用法见 `docs/温度脉动仪数据报告.md`；含 `channels.py`（环境要素）、`filters.py`（抖动剔除/平滑）、`slices.py`（时间片导出） |
+| 温度脉动仪报告 | analysis/thermo/ | `python -m ui.analysis.thermo`；用法见 `docs/温度脉动仪数据报告.md`；含 `channels.py`（环境要素）、`filters.py`（抖动剔除/平滑）、`slices.py`（时间片导出）、`spatial.py`（跨探针空间平均） |
 | Analysis metrics class | analysis/optical_analysis/beam_analysis_metrics.py | Orchestrates all calculations |
 | Session history | analysis/optical_analysis/history_manager.py | Save/load analysis results |
 

@@ -23,6 +23,8 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 
+from .spatial import spatial_summary
+
 if TYPE_CHECKING:  # 仅用于类型标注，避免与 pipeline 形成循环导入
     from .pipeline import AnalysisResult
 
@@ -361,6 +363,30 @@ def _tables(result: AnalysisResult) -> list[Table]:
                 max_rows=80,
             )
         )
+
+    if result.spatial is not None and not result.spatial.empty:
+        tables.append(
+            Table(
+                "spatial_summary",
+                "跨探针空间平均概况",
+                spatial_summary(result.spatial),
+                "位置插值平均复刻 notebooks/atmosphere_analysis.ipynb：按测点高度线性插值到等间隔网格后取均值；"
+                "缺少高度映射时退化为跨探针等权聚合，具体见“方式”列。",
+                {"均值": 3, "最低": 3, "最高": 3, "平均探针数": 1},
+                max_rows=40,
+            )
+        )
+        if result.spatial_daily is not None and not result.spatial_daily.empty:
+            tables.append(
+                Table(
+                    "spatial_daily",
+                    "逐日跨探针空间平均",
+                    result.spatial_daily,
+                    "对逐分钟空间平均序列按日再统计，便于与站点级观测或模式结果对比。",
+                    {"日均值": 3, "最低": 3, "最高": 3, "平均探针数": 1},
+                    max_rows=200,
+                )
+            )
     return tables
 
 
@@ -428,6 +454,20 @@ def _paragraphs(result: AnalysisResult) -> list[tuple[str, str]]:
     environment = _environment_paragraph(result)
     if environment:
         blocks.append(("环境要素与湍流", environment))
+
+    if not result.spatial.empty:
+        overview = spatial_summary(result.spatial)
+        parts: list[str] = []
+        for _, row in overview.iterrows():
+            unit = str(row.get("单位", "")).strip()
+            parts.append(f"{row['通道']} {_fmt(row.get('均值'))}" + (f" {unit}" if unit else ""))
+        method = str(facts.get("空间平均方式", "—"))
+        text = f"跨探针空间平均方式为{method}，覆盖 {facts.get('空间平均通道数', 0)} 个通道。"
+        if parts:
+            text += "全时段均值：" + "、".join(parts) + "。"
+        if not result.cfg.probes.heights_m:
+            text += "本次未配置探针安装高度，空间平均是跨探针等权聚合，不是 notebook 的位置插值平均。"
+        blocks.append(("跨探针空间平均", text))
 
     if not result.cn2_summary.empty:
         ratio = _median_column(result.cn2_summary, "Cn2比值")
@@ -663,6 +703,23 @@ def _html(result: AnalysisResult, tables: list[Table], figures: dict[str, Path])
                 if _find(tables, "channels") is not None
                 else '<p class="note">本次运行未读取环境要素通道（使用了 --no-aux 或数据中没有对应目录）。</p>'
             ),
+        ),
+        (
+            "spatial",
+            "跨探针空间平均",
+            _table_block(_find(tables, "spatial_summary"))
+            + _table_block(_find(tables, "spatial_daily"))
+            + '<div class="callout info"><strong>方法说明</strong><ul>'
+            "<li>参考 <code>notebooks/atmosphere_analysis.ipynb</code>：每分钟取各测点值，"
+            "按测点高度线性插值到等间隔网格（步长取最小相邻高差，网格右端开区间），再取算术平均。</li>"
+            "<li>旧宽表的测点高度写在列名里（<code>20m</code>）；现在的长表只有 <code>tp-1…tp-16</code>，"
+            "高度信息已丢失，必须用 <code>probes.heights_m</code> 或 <code>--probe-heights</code> 显式给出。</li>"
+            "<li>未配置高度、可定位探针不足或高度重复时，退化为跨探针等权聚合，"
+            "“方式”列会如实标注；两者不可混同解读。</li>"
+            "<li>逐分钟序列另存为 <code>spatial/spatial_mean.csv</code>，逐日汇总为 "
+            "<code>spatial/spatial_daily.csv</code>。</li></ul></div>"
+            if _find(tables, "spatial_summary") is not None
+            else '<p class="note">本次未生成空间平均（使用了 --no-spatial）。</p>',
         ),
         (
             "turbulence",

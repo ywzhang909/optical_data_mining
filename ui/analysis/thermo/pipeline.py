@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-from . import aggregate, channels, slices
+from . import aggregate, channels, slices, spatial
 from .config import ThermoReportConfig
 from .discovery import Inventory, discover
 from .ingest import FileResult, load_aux_minute_means, process_source
@@ -48,6 +48,8 @@ class AnalysisResult:
     wind: pd.DataFrame
     channels: dict[str, channels.ChannelResult] = field(default_factory=dict)
     slices: pd.DataFrame = field(default_factory=pd.DataFrame)
+    spatial: pd.DataFrame = field(default_factory=pd.DataFrame)
+    spatial_daily: pd.DataFrame = field(default_factory=pd.DataFrame)
     facts: dict[str, Any] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
     runtime_s: float = 0.0
@@ -185,6 +187,60 @@ def _load_wind(cfg: ThermoReportConfig, inventory: Inventory) -> pd.DataFrame:
     return selected
 
 
+def _spatial_tables(
+    cfg: ThermoReportConfig,
+    minute: pd.DataFrame,
+    channel_results: dict[str, channels.ChannelResult],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """温度与环境要素各通道的跨探针空间平均（逐分钟 + 逐日）。
+
+    温度用分钟均值 ``均值`` 列，环境要素用 ``数值`` 列；探针高度取自
+    ``cfg.probes.heights_m``，缺失时按 ``cfg.spatial.method`` 退化为等权聚合。
+    单路异常只记日志，不中断整批分析。
+    """
+    empty = pd.DataFrame(columns=spatial.SPATIAL_COLUMNS)
+    empty_daily = pd.DataFrame(columns=spatial.SPATIAL_DAILY_COLUMNS)
+    if not cfg.spatial.enabled:
+        return empty, empty_daily
+
+    jobs: list[tuple[str, str, str, str, pd.DataFrame]] = [
+        ("温度", "°C", "均值", "temperature", minute),
+    ]
+    for key, channel in (channel_results or {}).items():
+        if channel.minute is None or channel.minute.empty:
+            continue
+        jobs.append((channel.label, channel.unit, "数值", key, channel.minute))
+
+    series_parts: list[pd.DataFrame] = []
+    daily_parts: list[pd.DataFrame] = []
+    for label, unit, value_col, key, frame in jobs:
+        try:
+            series = spatial.spatial_series(
+                frame,
+                value_col,
+                cfg.probes.heights_m,
+                method=cfg.spatial.method,
+                min_probes=cfg.spatial.min_probes,
+            )
+            if series.empty:
+                continue
+            series.insert(0, "单位", unit)
+            series.insert(0, "通道", label)
+            series["通道键"] = key
+            series_parts.append(series)
+            daily_parts.append(spatial.daily_spatial_summary(series, label, unit))
+        except Exception as exc:  # 单通道异常不应中断整批分析
+            logger.warning("空间平均 {} 计算失败: {}: {}", label, type(exc).__name__, exc)
+            continue
+
+    if not series_parts:
+        return empty, empty_daily
+    merged = pd.concat(series_parts, ignore_index=True)
+    merged = merged[["通道", "通道键", "单位", "ts", "空间平均", "探针数", "方式"]]
+    daily = pd.concat(daily_parts, ignore_index=True) if daily_parts else empty_daily
+    return merged, daily
+
+
 def _facts(result: AnalysisResult) -> dict[str, Any]:
     """提取报告结论所需的关键数字。"""
     facts: dict[str, Any] = {}
@@ -261,6 +317,11 @@ def _facts(result: AnalysisResult) -> dict[str, Any]:
         best = result.overall_summary.sort_values("有效分钟", ascending=False)
         facts["数据最完整探针"] = str(best.iloc[0]["探针"]) if not best.empty else ""
         facts["有效率中位数"] = float(result.overall_summary["平均覆盖率"].median())
+
+    if not result.spatial.empty:
+        modes = result.spatial["方式"].dropna()
+        facts["空间平均方式"] = str(modes.mode().iloc[0]) if not modes.empty else ""
+        facts["空间平均通道数"] = int(result.spatial["通道"].nunique())
     return facts
 
 
@@ -389,6 +450,8 @@ def analyze(
         window_minutes=int(cfg.analysis.detrend_window_s // 60),
     )
 
+    spatial_frame, spatial_daily = _spatial_tables(cfg, minute, channel_results)
+
     result = AnalysisResult(
         cfg=cfg,
         inventory=inventory,
@@ -413,6 +476,8 @@ def analyze(
         wind=wind,
         channels=channel_results,
         slices=slice_frame,
+        spatial=spatial_frame,
+        spatial_daily=spatial_daily,
         probes=probes,
         valid_probes=valid_probes,
         failed_files=tuple(failed),
@@ -485,6 +550,20 @@ def _collect_notes(result: AnalysisResult) -> list[str]:
         notes.append(f"功率谱拟合 R² 仅 {r2:.2f}，谱形不符单一幂律，谱斜率仅作参考")
     for channel in (result.channels or {}).values():
         notes.extend(channel.notes)
+    if not result.spatial.empty:
+        heights = result.cfg.probes.heights_m
+        if not heights:
+            method_name = "等权算术平均" if result.cfg.spatial.method == "mean" else "等权中位数"
+            notes.append(
+                "未配置探针安装高度（probes.heights_m / --probe-heights），空间平均按跨探针"
+                f"{method_name}计算；notebook 的位置插值平均需要 tp → 高度映射"
+            )
+        else:
+            uncovered = [probe for probe in result.probes if probe not in heights]
+            if uncovered:
+                notes.append(f"探针 {'、'.join(uncovered)} 未配置安装高度，未参与位置插值平均")
+            if "位置插值平均" not in set(result.spatial["方式"].dropna()):
+                notes.append(f"可定位探针不足 {result.cfg.spatial.min_probes} 个或高度重复，空间平均退化为等权聚合")
     return notes
 
 
@@ -508,6 +587,12 @@ def build(
 
     stamp = run_name or datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = cfg.paths.output_dir / f"thermo_{stamp}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    spatial_files = spatial.write_spatial(result.spatial, result.spatial_daily, output_dir)
+    if spatial_files.get("spatial_mean"):
+        result.facts["空间平均文件"] = spatial_files["spatial_mean"]
+    if spatial_files.get("spatial_daily"):
+        result.facts["空间平均日统计文件"] = spatial_files["spatial_daily"]
     figures_dir = output_dir / "figures"
     figures = _render_figures(result, figures_dir)
     if cfg.export.enabled and not result.slices.empty:

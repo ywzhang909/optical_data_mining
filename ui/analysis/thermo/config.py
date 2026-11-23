@@ -33,6 +33,13 @@ class ProbeConfig(BaseModel):
     probe_prefix: str = Field(default="tp-", description="探针 ID 前缀，区分大小写不敏感匹配")
     include: tuple[str, ...] = Field(default=(), description="仅分析这些探针（空 = 全部）")
     exclude: tuple[str, ...] = Field(default=(), description="排除这些探针")
+    heights_m: dict[str, float] = Field(
+        default_factory=dict,
+        description=(
+            "探针安装高度（米）：tp-1 -> 1.5。旧宽表把高度写在列名（20m）里，"
+            "现长表只有 tp-N，故须显式给出；为空时空间平均退化为跨探针等权聚合"
+        ),
+    )
 
 
 class QualityConfig(BaseModel):
@@ -135,6 +142,16 @@ def default_channels() -> tuple[ChannelConfig, ...]:
             valid_max=1e-10,
             is_reference=True,
         ),
+        ChannelConfig(key="r0", subdir="r0_computed", label="相干长度 r0", unit="m", valid_min=0.0, valid_max=5.0),
+        ChannelConfig(
+            key="avecn2",
+            subdir="aveCn2_computed",
+            label="设备空间平均 Cn²",
+            unit="m^(-2/3)",
+            valid_min=1e-22,
+            valid_max=1e-10,
+            is_reference=True,
+        ),
     )
 
 
@@ -169,6 +186,16 @@ class ExportConfig(BaseModel):
     combined_parquet: bool = Field(default=True, description="同时写一份合并的 Parquet（便于批量分析）")
 
 
+class SpatialConfig(BaseModel):
+    """跨探针空间平均（对应 notebooks/atmosphere_analysis.ipynb 的位置插值平均）。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool = Field(default=True, description="是否计算跨探针空间平均")
+    method: str = Field(default="median", description="未配置高度时的跨探针聚合方式：median / mean")
+    min_probes: int = Field(default=3, description="位置插值平均所需的最少探针数")
+
+
 class ThermoReportConfig(BaseModel):
     """完整配置：由各子配置组合而成。"""
 
@@ -179,6 +206,7 @@ class ThermoReportConfig(BaseModel):
     quality: QualityConfig = Field(default_factory=QualityConfig)
     analysis: AnalysisConfig = Field(default_factory=AnalysisConfig)
     filtering: FilterConfig = Field(default_factory=FilterConfig)
+    spatial: SpatialConfig = Field(default_factory=SpatialConfig)
     export: ExportConfig = Field(default_factory=ExportConfig)
     channels: tuple[ChannelConfig, ...] = Field(
         default_factory=default_channels, description="温度以外的环境要素通道（湿度、能见度、Cn² 等）"
@@ -191,7 +219,17 @@ class ThermoReportConfig(BaseModel):
         with open(path, "rb") as handle:
             raw = tomllib.load(handle)
         sections: dict[str, Any] = {}
-        for name in ("paths", "probes", "quality", "analysis", "filtering", "export", "channels", "report"):
+        for name in (
+            "paths",
+            "probes",
+            "quality",
+            "analysis",
+            "filtering",
+            "spatial",
+            "export",
+            "channels",
+            "report",
+        ):
             if name in raw:
                 sections[name] = raw[name]
         unknown = set(raw) - set(sections)

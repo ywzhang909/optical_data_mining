@@ -16,6 +16,7 @@ from loguru import logger
 
 from .config import ThermoReportConfig
 from .pipeline import build
+from .spatial import heights_from_text
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -50,6 +51,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-slices", action="store_true", help="不导出时间片中间数据")
     parser.add_argument("--no-despike", action="store_true", help="关闭抖动异常剔除")
     parser.add_argument("--smooth-minutes", type=int, help="产品平滑窗口（分钟），1 表示不平滑")
+    parser.add_argument(
+        "--probe-heights",
+        default="",
+        metavar="tp-1=1.5,tp-2=3.0",
+        help="探针安装高度（米）；给出后启用 notebook 的位置插值平均，省略则按跨探针等权聚合",
+    )
+    parser.add_argument("--no-spatial", action="store_true", help="不计算跨探针空间平均")
+    parser.add_argument(
+        "--spatial-method",
+        choices=("median", "mean"),
+        help="未配置高度时的跨探针聚合方式，默认 median（中位数）",
+    )
     parser.add_argument("--verbose", action="store_true", help="输出调试日志")
     return parser
 
@@ -77,6 +90,18 @@ def config_from_args(args: argparse.Namespace) -> ThermoReportConfig:
     if getattr(args, "smooth_minutes", None) is not None:
         filtering = filtering.model_copy(update={"smooth_window_min": max(1, int(args.smooth_minutes))})
     updates["filtering"] = filtering
+
+    probes = cfg.probes
+    if getattr(args, "probe_heights", ""):
+        probes = probes.model_copy(update={"heights_m": heights_from_text(args.probe_heights)})
+    updates["probes"] = probes
+
+    spatial_cfg = cfg.spatial
+    if getattr(args, "no_spatial", False):
+        spatial_cfg = spatial_cfg.model_copy(update={"enabled": False})
+    if getattr(args, "spatial_method", None):
+        spatial_cfg = spatial_cfg.model_copy(update={"method": args.spatial_method})
+    updates["spatial"] = spatial_cfg
     return cfg.model_copy(update=updates)
 
 

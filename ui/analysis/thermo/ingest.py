@@ -87,6 +87,11 @@ def iter_wide_frames(
             chunk = pd.concat([pending, chunk], ignore_index=True)
             pending = None
 
+        # 只有表头（或整块时间戳都无法解析）时没有可切分的末尾组，
+        # 直接跳过：辅助通道里 r0_computed / aveCn2_computed 大量是仅表头的空文件。
+        if chunk.empty:
+            continue
+
         # 末尾时间戳可能是被切断的不完整组，留给下一块拼接
         last_ts = chunk["ts"].iloc[-1]
         complete = chunk[chunk["ts"] != last_ts]

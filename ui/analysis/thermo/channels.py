@@ -142,7 +142,7 @@ def load_channel(cfg: ThermoReportConfig, inventory: Inventory, channel: Channel
     if failed:
         result.notes.append(f"{channel.label}有 {failed} 个文件解析失败已跳过")
     if not frames:
-        result.notes.append(f"{channel.label}通道没有解析出有效数据（文件为空或全部为异常码）")
+        result.notes.append(f"{channel.label} 通道没有解析出有效数据（文件为空或全部为异常码）")
         return result
 
     minute = pd.concat(frames, ignore_index=True).sort_values(["ts", "探针"]).reset_index(drop=True)

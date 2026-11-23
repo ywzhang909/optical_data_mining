@@ -27,7 +27,7 @@ from analysis.thermo.config import (
 )
 from analysis.thermo.discovery import discover
 from analysis.thermo.filters import filter_frame, jitter_frame, jitter_mask
-from analysis.thermo.ingest import process_source, read_wide
+from analysis.thermo.ingest import load_aux_minute_means, process_source, read_wide
 from analysis.thermo.metrics import (
     cn2_from_ct2,
     ct2_from_structure,
@@ -296,6 +296,17 @@ def test_read_wide_masks_nothing_but_keeps_sentinel(cfg: ThermoReportConfig, dat
     wide = read_wide(source)
     assert wide["tp-9"].eq(SENTINEL).all()
     assert not wide["tp-1"].isna().any()
+
+
+def test_header_only_aux_file_yields_empty_frame(tmp_path: Path):
+    """r0_computed / aveCn2_computed 大量只有表头：应安静返回空表，而不是抛 IndexError。"""
+    channel = tmp_path / "20261014" / "r0_computed"
+    channel.mkdir(parents=True)
+    (channel / "r0_computed_00.csv").write_text("ID,r0,Timestamp\n", encoding="utf-8")
+    source = discover(tmp_path, days=("20261014",), channel_dirs=("r0_computed",)).by_channel("r0_computed")[0]
+    frame = load_aux_minute_means(source, "1min", value_min=0.0, value_max=5.0)
+    assert frame.empty
+    assert list(frame.columns) == ["ts", "探针", "数值"]
 
 
 # --------------------------------------------------------------------------- #

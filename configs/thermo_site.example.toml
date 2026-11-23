@@ -1,0 +1,49 @@
+# 温度脉动仪报告配置示例：复制为 configs/thermo_site.toml 后按站点实际情况修改。
+# 未写的段/字段使用默认值；未知配置段会直接报错（防止拼写被静默忽略）。
+
+[paths]
+data_root = "data/daily_data"
+output_dir = "data/reports"
+cache_dir = "data/reports/.cache"
+
+[probes]
+# 探针安装高度（米）。**必须按实际安装填写**：长表只有 tp-1…tp-16，高度信息不在数据里。
+# 留空则「跨探针空间平均」退化为等权聚合，报告会如实标注，不能当作位置插值平均使用。
+[probes.heights_m]
+tp-1 = 1.5
+tp-2 = 3.0
+tp-3 = 4.5
+
+[spatial]
+enabled = true
+method = "median"          # 无高度时的跨探针聚合：median / mean
+min_probes = 3             # 位置插值平均所需的最少探针数
+
+[quality]
+stuck_min_seconds = 600.0
+quantization_step_c = 0.1
+cross_probe_max_dev_c = 5.0     # 与跨探针中值偏离超过该值判掉线并剔除；0 关闭
+min_probe_valid_ratio = 0.5
+
+[filtering]
+despike_enabled = true
+despike_window_s = 5.0
+despike_threshold_c = 1.0
+smooth_window_min = 5
+
+[analysis]
+block_rule = "10min"
+site_pressure_hpa = 1013.25     # 按站点实际气压修改
+spectrum_auto_band = true
+min_span_hours_for_diurnal = 6.0
+
+[export]
+enabled = true
+slice_rule = "10min"
+per_slice_files = true
+combined_parquet = true
+
+[report]
+title = "温度脉动仪数据报告"
+author = ""
+max_series_probes = 8

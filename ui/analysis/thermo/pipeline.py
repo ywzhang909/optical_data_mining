@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -50,6 +51,9 @@ class AnalysisResult:
     slices: pd.DataFrame = field(default_factory=pd.DataFrame)
     spatial: pd.DataFrame = field(default_factory=pd.DataFrame)
     spatial_daily: pd.DataFrame = field(default_factory=pd.DataFrame)
+    spatial_heights: dict[str, float] = field(default_factory=dict)
+    spatial_heights_source: str = ""
+    channel_correlation: pd.DataFrame = field(default_factory=pd.DataFrame)
     facts: dict[str, Any] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
     runtime_s: float = 0.0
@@ -191,13 +195,15 @@ def _spatial_tables(
     cfg: ThermoReportConfig,
     minute: pd.DataFrame,
     channel_results: dict[str, channels.ChannelResult],
+    heights: Mapping[str, float] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """温度与环境要素各通道的跨探针空间平均（逐分钟 + 逐日）。
 
-    温度用分钟均值 ``均值`` 列，环境要素用 ``数值`` 列；探针高度取自
-    ``cfg.probes.heights_m``，缺失时按 ``cfg.spatial.method`` 退化为等权聚合。
+    温度用分钟均值 ``均值`` 列，环境要素用 ``数值`` 列；探针高度取自 ``heights``
+    （默认 ``cfg.probes.heights_m``），缺失时按 ``cfg.spatial.method`` 退化为等权聚合。
     单路异常只记日志，不中断整批分析。
     """
+    positions = dict(cfg.probes.heights_m if heights is None else heights)
     empty = pd.DataFrame(columns=spatial.SPATIAL_COLUMNS)
     empty_daily = pd.DataFrame(columns=spatial.SPATIAL_DAILY_COLUMNS)
     if not cfg.spatial.enabled:
@@ -218,7 +224,7 @@ def _spatial_tables(
             series = spatial.spatial_series(
                 frame,
                 value_col,
-                cfg.probes.heights_m,
+                positions,
                 method=cfg.spatial.method,
                 min_probes=cfg.spatial.min_probes,
             )
@@ -322,6 +328,16 @@ def _facts(result: AnalysisResult) -> dict[str, Any]:
         modes = result.spatial["方式"].dropna()
         facts["空间平均方式"] = str(modes.mode().iloc[0]) if not modes.empty else ""
         facts["空间平均通道数"] = int(result.spatial["通道"].nunique())
+        if result.spatial_heights:
+            facts["探针高度来源"] = result.spatial_heights_source or "显式配置"
+            facts["空间平均高度"] = tuple(
+                (probe, float(height)) for probe, height in sorted(result.spatial_heights.items(), key=lambda kv: kv[1])
+            )
+    if result.channel_correlation is not None and not result.channel_correlation.empty:
+        best = aggregate.strongest_correlation(result.channel_correlation)
+        if best is not None:
+            facts["协同相关通道对"] = f"{best[0]} ↔ {best[1]}"
+            facts["协同相关系数"] = float(best[2])
     return facts
 
 
@@ -450,7 +466,25 @@ def analyze(
         window_minutes=int(cfg.analysis.detrend_window_s // 60),
     )
 
-    spatial_frame, spatial_daily = _spatial_tables(cfg, minute, channel_results)
+    heights, heights_source = spatial.resolve_heights(
+        probes,
+        cfg.probes.heights_m,
+        base_m=cfg.probes.heights_even_base_m,
+        step_m=cfg.probes.heights_even_step_m,
+        source=cfg.probes.heights_source,
+    )
+    if heights:
+        logger.info("探针高度来自 {}", heights_source)
+    spatial_frame, spatial_daily = _spatial_tables(cfg, minute, channel_results, heights=heights)
+
+    channel_series: dict[str, pd.DataFrame] = {}
+    if not minute.empty:
+        channel_series["温度"] = minute[["ts", "探针", "均值"]].rename(columns={"均值": "数值"})
+    for channel in (channel_results or {}).values():
+        channel_series[channel.label] = channel.minute
+    if not wind.empty:
+        channel_series["风速"] = wind[["ts", "探针", "数值"]]
+    channel_correlation = aggregate.channel_cross_correlation(channel_series)
 
     result = AnalysisResult(
         cfg=cfg,
@@ -478,6 +512,9 @@ def analyze(
         slices=slice_frame,
         spatial=spatial_frame,
         spatial_daily=spatial_daily,
+        spatial_heights=heights,
+        spatial_heights_source=heights_source,
+        channel_correlation=channel_correlation,
         probes=probes,
         valid_probes=valid_probes,
         failed_files=tuple(failed),
@@ -551,14 +588,19 @@ def _collect_notes(result: AnalysisResult) -> list[str]:
     for channel in (result.channels or {}).values():
         notes.extend(channel.notes)
     if not result.spatial.empty:
-        heights = result.cfg.probes.heights_m
+        heights = dict(result.spatial_heights or {})
+        source = result.spatial_heights_source
         if not heights:
             method_name = "等权算术平均" if result.cfg.spatial.method == "mean" else "等权中位数"
             notes.append(
-                "未配置探针安装高度（probes.heights_m / --probe-heights），空间平均按跨探针"
+                "未配置探针安装高度（probes.heights_m / --probe-heights / --probe-heights-even），空间平均按跨探针"
                 f"{method_name}计算；notebook 的位置插值平均需要 tp → 高度映射"
             )
         else:
+            if result.cfg.probes.heights_even_enabled() and not result.cfg.probes.heights_m:
+                notes.append(f"未给出实测安装高度，位置插值采用{source}，高度为假设值而非现场测量")
+            elif source:
+                notes.append(f"探针高度来源：{source}")
             uncovered = [probe for probe in result.probes if probe not in heights]
             if uncovered:
                 notes.append(f"探针 {'、'.join(uncovered)} 未配置安装高度，未参与位置插值平均")

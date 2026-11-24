@@ -8,7 +8,10 @@
 
 * 配置里给出 ``probes.heights_m``（或命令行 ``--probe-heights``）时，按高度做
   **线性插值到等间隔网格后取平均**，与 notebook 的 ``interp1d`` + ``np.mean`` 等价；
-* 没有高度（或可用高度不足）时退化为**跨探针等权聚合**，并在结果里用 ``方式``
+* 没有实测高度、但给了 ``probes.heights_even_base_m/step_m``（或命令行
+  ``--probe-heights-even``）时，按探针编号生成**等间距假设**，同样做位置插值平均，
+  但结果与报告都会标注「等间距假设」，不能当成实测安装高度；
+* 两种都没有（或可用高度不足）时退化为**跨探针等权聚合**，并在结果里用 ``方式``
   列写明，报告与提示同步说明，避免把等权平均当成位置平均来解读。
 """
 
@@ -213,6 +216,71 @@ def write_spatial(spatial: pd.DataFrame, daily: pd.DataFrame, output_dir: Path) 
         daily.to_csv(target / "spatial_daily.csv", index=False, encoding="utf-8-sig")
         written["spatial_daily"] = "spatial/spatial_daily.csv"
     return written
+
+
+def probe_number(probe: str) -> int | None:
+    """从探针名取编号：``tp-7`` → 7；编号不是整数时返回 None。"""
+    suffix = str(probe).rsplit("-", 1)[-1].strip()
+    return int(suffix) if suffix.isdigit() else None
+
+
+def even_heights(probes: Sequence[str], base_m: float, step_m: float) -> dict[str, float]:
+    """按探针编号顺序生成等间距高度。
+
+    ``tp-1`` → ``base_m``，``tp-2`` → ``base_m + step_m``，依此类推（按编号升序
+    分配，不按探针在数据里出现的顺序）。名字里没有数字编号的探针被忽略。
+
+    这是**假设**而非实测安装高度，调用方必须把来历写进报告。
+    """
+    if step_m <= 0:
+        raise ValueError(f"等间距间隔必须为正数，收到 {step_m}")
+    numbered: list[tuple[int, str]] = []
+    for probe in probes:
+        number = probe_number(probe)
+        if number is not None:
+            numbered.append((number, str(probe)))
+    numbered.sort()
+    return {name: round(float(base_m) + index * float(step_m), 6) for index, (_, name) in enumerate(numbered)}
+
+
+def even_heights_from_text(text: str) -> tuple[float, float]:
+    """解析 ``"5,2"``（底层高度,间隔）→ ``(5.0, 2.0)``；非法输入抛 ValueError。"""
+    parts = [chunk.strip() for chunk in str(text or "").replace(":", ",").split(",") if chunk.strip()]
+    if len(parts) != 2:
+        raise ValueError(f"等间距高度应写成「底层高度,间隔」，例如 5,2；收到 {text!r}")
+    try:
+        base_m, step_m = float(parts[0]), float(parts[1])
+    except ValueError as exc:
+        raise ValueError(f"等间距高度数值无法解析：{text!r}") from exc
+    if step_m <= 0:
+        raise ValueError(f"等间距间隔必须为正数，收到 {step_m}")
+    return base_m, step_m
+
+
+def resolve_heights(
+    probes: Sequence[str],
+    heights: Mapping[str, float] | None = None,
+    *,
+    base_m: float | None = None,
+    step_m: float | None = None,
+    source: str = "",
+) -> tuple[dict[str, float], str]:
+    """确定位置插值用的高度表，并返回高度的来历说明。
+
+    优先级：
+
+    1. ``heights`` 非空 → 原样使用（实测或手工配置），来源取 ``source`` 或默认说明；
+    2. 否则 ``base_m`` 与 ``step_m`` 同时给出 → 按编号生成等间距**假设**；
+    3. 都没有 → 空表 + 空说明，调用方退化为跨探针等权聚合。
+    """
+    explicit = {str(key): float(val) for key, val in (heights or {}).items()}
+    if explicit:
+        return explicit, source.strip() or "显式配置（probes.heights_m / --probe-heights）"
+    if base_m is not None and step_m is not None:
+        generated = even_heights(probes, base_m, step_m)
+        label = source.strip() or f"等间距假设（tp-1 = {float(base_m):g} m、间隔 {float(step_m):g} m）"
+        return generated, label
+    return {}, ""
 
 
 def heights_from_text(text: str) -> dict[str, float]:

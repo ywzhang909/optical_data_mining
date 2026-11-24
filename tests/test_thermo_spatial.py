@@ -22,7 +22,11 @@ from analysis.thermo.spatial import (
     aggregate_across_probes,
     daily_spatial_summary,
     equal_interval_mean,
+    even_heights,
+    even_heights_from_text,
     heights_from_text,
+    probe_number,
+    resolve_heights,
     spatial_series,
     spatial_summary,
     write_spatial,
@@ -234,3 +238,80 @@ def test_cli_wires_spatial_options():
     off = config_from_args(parser.parse_args(["--no-spatial"]))
     assert not off.spatial.enabled
     assert off.probes.heights_m == {}
+
+
+def test_probe_number_and_even_heights():
+    assert probe_number("tp-7") == 7
+    assert probe_number("tp-x") is None
+    heights = even_heights(["tp-3", "tp-1", "tp-2"], 5.0, 2.0)
+    assert heights == {"tp-1": 5.0, "tp-2": 7.0, "tp-3": 9.0}
+    with pytest.raises(ValueError):
+        even_heights(["tp-1"], 5.0, 0.0)
+
+
+def test_even_heights_from_text_validates():
+    assert even_heights_from_text("5, 2") == (5.0, 2.0)
+    assert even_heights_from_text("5:2") == (5.0, 2.0)
+    for text in ("", "5", "a,b", "5,0", "5,-2"):
+        with pytest.raises(ValueError):
+            even_heights_from_text(text)
+
+
+def test_resolve_heights_priority():
+    explicit, source = resolve_heights(["tp-1", "tp-2"], {"tp-1": 100.0}, base_m=5.0, step_m=2.0)
+    assert explicit == {"tp-1": 100.0}
+    assert "显式配置" in source
+
+    generated, source = resolve_heights(["tp-1", "tp-2", "tp-3"], None, base_m=5.0, step_m=2.0)
+    assert generated == {"tp-1": 5.0, "tp-2": 7.0, "tp-3": 9.0}
+    assert "等间距假设" in source
+
+    empty, source = resolve_heights(["tp-1"], None)
+    assert empty == {} and source == ""
+
+    custom, source = resolve_heights(["tp-1"], None, base_m=5.0, step_m=2.0, source="自定义假设")
+    assert custom == {"tp-1": 5.0} and source == "自定义假设"
+
+
+def test_analyze_even_heights_assumption(tmp_path: Path):
+    root = tmp_path / "daily"
+    _write_day(root)
+    cfg = _config(root, tmp_path)
+    cfg = cfg.model_copy(
+        update={"probes": cfg.probes.model_copy(update={"heights_even_base_m": 5.0, "heights_even_step_m": 2.0})}
+    )
+    result = analyze(cfg, with_auxiliary=False)
+
+    assert set(result.spatial["方式"]) == {METHOD_INTERP}
+    assert result.spatial_heights == {"tp-1": 5.0, "tp-2": 7.0, "tp-3": 9.0}
+    assert "等间距假设" in result.spatial_heights_source
+    assert any("假设值而非现场测量" in note for note in result.notes)
+
+
+def test_analyze_explicit_heights_override_even(tmp_path: Path):
+    root = tmp_path / "daily"
+    _write_day(root)
+    cfg = _config(root, tmp_path, heights={"tp-1": 1.0, "tp-2": 2.0, "tp-3": 3.0})
+    cfg = cfg.model_copy(
+        update={"probes": cfg.probes.model_copy(update={"heights_even_base_m": 5.0, "heights_even_step_m": 2.0})}
+    )
+    result = analyze(cfg, with_auxiliary=False)
+
+    assert result.spatial_heights == {"tp-1": 1.0, "tp-2": 2.0, "tp-3": 3.0}
+    assert not any("假设值而非现场测量" in note for note in result.notes)
+
+
+def test_cli_wires_even_heights():
+    parser = build_parser()
+    cfg = config_from_args(parser.parse_args(["--probe-heights-even", "5,2"]))
+    assert cfg.probes.heights_even_base_m == 5.0
+    assert cfg.probes.heights_even_step_m == 2.0
+    assert cfg.probes.heights_m == {}
+    assert "等间距假设" in cfg.probes.heights_source
+
+    both = config_from_args(parser.parse_args(["--probe-heights", "tp-1=1.5", "--probe-heights-even", "5,2"]))
+    assert both.probes.heights_m == {"tp-1": 1.5}
+    assert both.probes.heights_even_base_m is None
+
+    with pytest.raises(ValueError):
+        config_from_args(parser.parse_args(["--probe-heights-even", "5"]))

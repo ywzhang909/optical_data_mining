@@ -9,6 +9,12 @@ cache_dir = "data/reports/.cache"
 [probes]
 # 探针安装高度（米）。**必须按实际安装填写**：长表只有 tp-1…tp-16，高度信息不在数据里。
 # 留空则「跨探针空间平均」退化为等权聚合，报告会如实标注，不能当作位置插值平均使用。
+# 确实没有实测高度时，可用等间距**假设**替代（tp-1 高度 + 层间隔，单位米）：
+# heights_even_base_m = 5.0
+# heights_even_step_m = 2.0
+# heights_source = "等间距假设（tp-1 = 5 m、间隔 2 m）"   # 留空则自动生成说明
+# 注意：这些键属于 [probes]，必须写在 [probes.heights_m] 子表之前。
+# 报告与数据提示会对等间距高度标注「假设值而非现场测量」。
 [probes.heights_m]
 tp-1 = 1.5
 tp-2 = 3.0

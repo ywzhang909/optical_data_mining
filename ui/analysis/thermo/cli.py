@@ -16,7 +16,7 @@ from loguru import logger
 
 from .config import ThermoReportConfig
 from .pipeline import build
-from .spatial import heights_from_text
+from .spatial import even_heights_from_text, heights_from_text
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -57,6 +57,12 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="tp-1=1.5,tp-2=3.0",
         help="探针安装高度（米）；给出后启用 notebook 的位置插值平均，省略则按跨探针等权聚合",
     )
+    parser.add_argument(
+        "--probe-heights-even",
+        default="",
+        metavar="BASE,STEP",
+        help='无实测高度时按编号生成等间距假设，例如 "5,2" 表示 tp-1 在 5 m、每层间隔 2 m（报告会标注为假设）',
+    )
     parser.add_argument("--no-spatial", action="store_true", help="不计算跨探针空间平均")
     parser.add_argument(
         "--spatial-method",
@@ -94,6 +100,18 @@ def config_from_args(args: argparse.Namespace) -> ThermoReportConfig:
     probes = cfg.probes
     if getattr(args, "probe_heights", ""):
         probes = probes.model_copy(update={"heights_m": heights_from_text(args.probe_heights)})
+    if getattr(args, "probe_heights_even", ""):
+        base_m, step_m = even_heights_from_text(args.probe_heights_even)
+        if probes.heights_m:
+            logger.warning("同时给出 --probe-heights 与 --probe-heights-even，实测高度优先，忽略等间距假设")
+        else:
+            probes = probes.model_copy(
+                update={
+                    "heights_even_base_m": base_m,
+                    "heights_even_step_m": step_m,
+                    "heights_source": f"等间距假设（tp-1 = {base_m:g} m、间隔 {step_m:g} m）",
+                }
+            )
     updates["probes"] = probes
 
     spatial_cfg = cfg.spatial

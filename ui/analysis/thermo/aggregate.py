@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 
 import numpy as np
 import pandas as pd
@@ -283,6 +284,61 @@ def spectrum_curves(block: pd.DataFrame, probes: tuple[str, ...]) -> pd.DataFram
         )
         summary = summary.merge(band.reset_index(), on="探针", how="left")
     return summary
+
+
+def channel_cross_correlation(series: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
+    """多通道逐分钟序列的两两相关系数（温度 × 风速 × 湿度 × 能见度 × Cn²）。
+
+    每个输入框都是长表 ``ts, 探针, 数值``：先剔除全程恒为 0 的失效探针，再对同一
+    时次取跨探针中位数得到通道序列，最后按时间对齐计算 Pearson 相关系数。返回
+    “通道”列 + 各通道列的对称矩阵（重叠样本不足 3 个的通道对留空）。
+
+    交叉相关只描述“是否同步起伏”，不区分日变化趋势与湍流尺度过程；解读时必须
+    说明这一点，必要时先按窗口去趋势。
+    """
+    per_minute: dict[str, pd.Series] = {}
+    for label, frame in (series or {}).items():
+        if frame is None or frame.empty or "数值" not in frame or "ts" not in frame:
+            continue
+        working = frame.copy()
+        working["数值"] = pd.to_numeric(working["数值"], errors="coerce")
+        working = working.dropna(subset=["数值"])
+        if working.empty:
+            continue
+        if "探针" in working:
+            probe_medians = working.groupby("探针", observed=True)["数值"].median()
+            usable = probe_medians[probe_medians != 0].index
+            if len(usable):
+                working = working[working["探针"].isin(usable)]
+        stamps = pd.to_datetime(working["ts"], errors="coerce")
+        aligned = working.assign(ts=stamps).dropna(subset=["ts"]).groupby("ts", observed=True)["数值"].median()
+        if aligned.size >= 3:
+            per_minute[str(label)] = aligned
+    if len(per_minute) < 2:
+        return pd.DataFrame()
+    frame = pd.DataFrame(per_minute)
+    matrix = frame.corr(min_periods=3).round(3)
+    matrix.insert(0, "通道", [str(label) for label in matrix.index])
+    return matrix.reset_index(drop=True)
+
+
+def strongest_correlation(matrix: pd.DataFrame) -> tuple[str, str, float] | None:
+    """矩阵中绝对值最大的非自相关通道对：(通道A, 通道B, 系数)。"""
+    if matrix is None or matrix.empty or "通道" not in matrix:
+        return None
+    labels = [str(label) for label in matrix["通道"].tolist()]
+    best: tuple[str, str, float] | None = None
+    for i, left in enumerate(labels):
+        for right in labels[i + 1 :]:
+            try:
+                value = float(matrix.loc[i, right])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not math.isfinite(value):
+                continue
+            if best is None or abs(value) > abs(best[2]):
+                best = (left, right, value)
+    return best
 
 
 def merge_device_cn2(block: pd.DataFrame, device_cn2: pd.DataFrame, rule: str) -> pd.DataFrame:

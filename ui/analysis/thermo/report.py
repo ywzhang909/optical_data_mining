@@ -3,8 +3,9 @@
 设计约束：
 
 * **自包含** —— 图片以 base64 内嵌，报告目录可整体拷贝/归档，不依赖相对路径；
-* **可核查** —— 每个结论都能回指到 `tables/*.csv` 中的原始统计或 `figures/*.png`；
-* **可复现** —— `manifest.json` 记录配置、软件版本与输入文件清单。
+* **结论优先** —— 正文只写数字与判断，不堆砌产物文件名；产物清单单独放在附录；
+* **可核查** —— 每个结论都能回指到随附统计表中的对应行；
+* **可复现** —— 报告内嵌运行配置、软件版本与输入规模。
 """
 
 from __future__ import annotations
@@ -364,14 +365,26 @@ def _tables(result: AnalysisResult) -> list[Table]:
             )
         )
 
+    if result.channel_correlation is not None and not result.channel_correlation.empty:
+        tables.append(
+            Table(
+                "channel_correlation",
+                "多通道逐分钟相关系数",
+                result.channel_correlation,
+                "交叉协同：每分钟先对探针取中位数，再按时间对齐计算 Pearson 相关系数；"
+                "未去趋势，数值含昼夜节律，解读见正文“多数据协同”。",
+                max_rows=20,
+            )
+        )
+
     if result.spatial is not None and not result.spatial.empty:
         tables.append(
             Table(
                 "spatial_summary",
                 "跨探针空间平均概况",
                 spatial_summary(result.spatial),
-                "位置插值平均复刻 notebooks/atmosphere_analysis.ipynb：按测点高度线性插值到等间隔网格后取均值；"
-                "缺少高度映射时退化为跨探针等权聚合，具体见“方式”列。",
+                "位置插值平均：按测点高度线性插值到等间隔网格后取均值；"
+                "缺少高度映射时退化为跨探针等权聚合，具体见“方式”列。高度是否为实测见正文说明。",
                 {"均值": 3, "最低": 3, "最高": 3, "平均探针数": 1},
                 max_rows=40,
             )
@@ -462,12 +475,25 @@ def _paragraphs(result: AnalysisResult) -> list[tuple[str, str]]:
             unit = str(row.get("单位", "")).strip()
             parts.append(f"{row['通道']} {_fmt(row.get('均值'))}" + (f" {unit}" if unit else ""))
         method = str(facts.get("空间平均方式", "—"))
+        source = str(result.spatial_heights_source or "").strip()
         text = f"跨探针空间平均方式为{method}，覆盖 {facts.get('空间平均通道数', 0)} 个通道。"
         if parts:
             text += "全时段均值：" + "、".join(parts) + "。"
-        if not result.cfg.probes.heights_m:
-            text += "本次未配置探针安装高度，空间平均是跨探针等权聚合，不是 notebook 的位置插值平均。"
+        if result.spatial_heights:
+            if result.cfg.probes.heights_even_enabled() and not result.cfg.probes.heights_m:
+                text += (
+                    f"本次没有实测安装高度，位置插值所用高度按{source}生成，属假设而非现场测量；"
+                    "空间平均与垂直梯度的物理解读应据此保守处理。"
+                )
+            else:
+                text += f"位置插值所用的探针高度依据：{source or '显式配置'}。"
+        else:
+            text += "本次没有可用的探针安装高度，空间平均为跨探针等权聚合，不是按高度插值的剖面平均。"
         blocks.append(("跨探针空间平均", text))
+
+    synergy = _synergy_paragraph(result)
+    if synergy:
+        blocks.append(("多数据协同", synergy))
 
     if not result.cn2_summary.empty:
         ratio = _median_column(result.cn2_summary, "Cn2比值")
@@ -480,6 +506,56 @@ def _paragraphs(result: AnalysisResult) -> list[tuple[str, str]]:
         )
         blocks.append(("Cn² 交叉验证", cn2_text))
     return blocks
+
+
+def _describe_pair(value: float) -> str:
+    magnitude = abs(value)
+    direction = "同向起伏" if value > 0 else "反相起伏"
+    if magnitude >= 0.7:
+        return f"强相关、{direction}"
+    if magnitude >= 0.4:
+        return f"中等相关、{direction}"
+    return f"弱相关、{direction}"
+
+
+def _synergy_paragraph(result: AnalysisResult) -> str:
+    """多通道协同：分钟序列两两相关，点出同步起伏最强的通道对。"""
+    matrix = getattr(result, "channel_correlation", None)
+    if matrix is None or getattr(matrix, "empty", True) or "通道" not in matrix:
+        return ""
+    labels = [str(label) for label in matrix["通道"].tolist()]
+    pairs: list[tuple[float, str, str]] = []
+    for index, left in enumerate(labels):
+        for right in labels[index + 1 :]:
+            try:
+                value = float(pd.to_numeric(matrix[right], errors="coerce").iloc[index])
+            except (KeyError, IndexError, TypeError, ValueError):
+                continue
+            if math.isfinite(value):
+                pairs.append((value, left, right))
+    if not pairs:
+        return ""
+    pairs.sort(key=lambda item: abs(item[0]), reverse=True)
+    ranked = "、".join(f"{left}与{right} r={value:+.2f}（{_describe_pair(value)}）" for value, left, right in pairs[:3])
+    text = (
+        f"分钟尺度上共比对 {len(labels)} 个通道，起伏最同步的通道对为：{ranked}。"
+        "这些系数建立在未去趋势的分钟序列上，昼夜节律会让同受太阳辐射驱动的量"
+        "（温度、湿度、Cn²）同时涨落并呈现高相关，符号主要由相位决定；"
+        "因此它说明的是各要素“是否同步”，不能直接当作湍流尺度上的耦合或因果关系。"
+    )
+    if "温度" in labels and any("Cn²" in label for label in labels):
+        text += "温度反演 Cn² 与设备 Cn² 的独立交叉验证另见下一节。"
+    return text
+
+
+def _spatial_height_note(result: AnalysisResult) -> str:
+    """空间平均所依据的探针高度来历（实测 / 等间距假设 / 未配置）。"""
+    source = str(result.spatial_heights_source or "").strip()
+    if not result.spatial_heights:
+        return "本次没有可用的探针安装高度，空间平均为跨探针等权聚合，不是按高度插值。"
+    if result.cfg.probes.heights_even_enabled() and not result.cfg.probes.heights_m:
+        return f"高度按{source}生成，属假设值（非现场测量）；剖面类结论需按此前提解读。"
+    return f"空间平均使用的探针高度依据：{source or '显式配置（实测或手工整理）'}。"
 
 
 def _environment_paragraph(result: AnalysisResult) -> str:
@@ -692,12 +768,13 @@ def _html(result: AnalysisResult, tables: list[Table], figures: dict[str, Path])
             "环境要素",
             _img(figures, "environment", "图 8　湿度、能见度、设备 Cn² 与风速")
             + _table_block(_find(tables, "channels"))
+            + _table_block(_find(tables, "channel_correlation"))
             + (
                 '<div class="callout info"><strong>说明</strong><ul>'
                 "<li>各通道按物理范围剔除异常码后做分钟均值：湿度 0–100 %、风速 0–60 m/s、能见度 0–100 km、"
-                f"Cn² 1e-22–1e-10；温度另做抖动剔除与跨探针离群剔除。</li>"
-                f"<li>时间片（{html.escape(cfg.export.slice_rule)}）中间数据同时导出到 <code>slices/</code>，"
-                "每片一份 CSV，含各通道与湍流参数，可直接被下游脚本消费。</li>"
+                "Cn² 1e-22–1e-10；温度另做抖动剔除与跨探针离群剔除。</li>"
+                "<li>相关系数用于判断通道间是否同步起伏，未去趋势，含昼夜节律；"
+                "不代表因果，也不等于湍流尺度上的耦合。</li>"
                 "<li>报告与导出中的“平滑值”是滑窗均值，只用于看趋势；谱、结构函数与 C_T² 一律用未平滑序列，"
                 "否则会抹掉惯性子区。</li></ul></div>"
                 if _find(tables, "channels") is not None
@@ -710,14 +787,11 @@ def _html(result: AnalysisResult, tables: list[Table], figures: dict[str, Path])
             _table_block(_find(tables, "spatial_summary"))
             + _table_block(_find(tables, "spatial_daily"))
             + '<div class="callout info"><strong>方法说明</strong><ul>'
-            "<li>参考 <code>notebooks/atmosphere_analysis.ipynb</code>：每分钟取各测点值，"
-            "按测点高度线性插值到等间隔网格（步长取最小相邻高差，网格右端开区间），再取算术平均。</li>"
-            "<li>旧宽表的测点高度写在列名里（<code>20m</code>）；现在的长表只有 <code>tp-1…tp-16</code>，"
-            "高度信息已丢失，必须用 <code>probes.heights_m</code> 或 <code>--probe-heights</code> 显式给出。</li>"
+            "<li>每分钟取各测点值，按测点高度线性插值到等间隔网格（步长取最小相邻高差，网格右端开区间），再取算术平均。</li>"
+            f"<li>{html.escape(_spatial_height_note(result))}</li>"
             "<li>未配置高度、可定位探针不足或高度重复时，退化为跨探针等权聚合，"
             "“方式”列会如实标注；两者不可混同解读。</li>"
-            "<li>逐分钟序列另存为 <code>spatial/spatial_mean.csv</code>，逐日汇总为 "
-            "<code>spatial/spatial_daily.csv</code>。</li></ul></div>"
+            "</ul></div>"
             if _find(tables, "spatial_summary") is not None
             else '<p class="note">本次未生成空间平均（使用了 --no-spatial）。</p>',
         ),
@@ -770,7 +844,7 @@ def _html(result: AnalysisResult, tables: list[Table], figures: dict[str, Path])
 {body}
 <footer>
 本报告由 <code>ui.analysis.thermo</code> 自动生成（schema v{REPORT_SCHEMA_VERSION}）。
-数据与统计口径见 <code>manifest.json</code> 与 <code>tables/*.csv</code>。
+关键指标、统计表与图表随报告目录一并导出，便于复核。
 </footer>
 </body>
 </html>
@@ -873,14 +947,7 @@ def _markdown(result: AnalysisResult, tables: list[Table], figures: dict[str, Pa
 
     lines.extend(
         [
-            "## 产物",
-            "",
-            "- `report.html`：自包含 HTML 报告（图片内嵌）",
-            "- `summary.md`：本文件",
-            "- `metrics.json`：关键指标",
-            "- `manifest.json`：配置、版本与输入清单",
-            "- `tables/*.csv`：全部统计表（UTF-8 BOM，可直接用 Excel 打开）",
-            "- `figures/*.png`：图表原图",
+            "> 关键指标、完整统计表与图表原图随报告目录一并导出，可对照正文结论复核。",
             "",
         ]
     )

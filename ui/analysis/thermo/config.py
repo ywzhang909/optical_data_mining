@@ -40,6 +40,29 @@ class ProbeConfig(BaseModel):
             "现长表只有 tp-N，故须显式给出；为空时空间平均退化为跨探针等权聚合"
         ),
     )
+    heights_source: str = Field(
+        default="",
+        description=(
+            "高度取值来源说明，例如「等间距假设（5 m 起、2 m 间隔）」。"
+            "给出 heights_m 或等间距假设时用于报告标注；留空则由配置自动生成一句说明"
+        ),
+    )
+    heights_even_base_m: float | None = Field(
+        default=None,
+        description=(
+            "没有实测高度时的等间距**假设**：编号最小探针（tp-1）的高度（米）。"
+            "与 heights_even_step_m 同时给出才生效；heights_m 优先"
+        ),
+    )
+    heights_even_step_m: float | None = Field(
+        default=None,
+        gt=0.0,
+        description="等间距假设的层间隔（米），必须为正数；None 表示不启用",
+    )
+
+    def heights_even_enabled(self) -> bool:
+        """是否配置了可用的等间距假设（底层高度 + 正间隔）。"""
+        return self.heights_even_base_m is not None and self.heights_even_step_m is not None
 
 
 class QualityConfig(BaseModel):

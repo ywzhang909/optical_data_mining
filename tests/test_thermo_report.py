@@ -15,7 +15,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
-from analysis.thermo.aggregate import anomaly_correlation, diurnal_profile
+from analysis.thermo.aggregate import (
+    anomaly_correlation,
+    channel_cross_correlation,
+    diurnal_profile,
+    strongest_correlation,
+)
 from analysis.thermo.channels import _quality_notes, slice_table
 from analysis.thermo.config import (
     AnalysisConfig,
@@ -517,3 +522,37 @@ def test_quality_notes_flags_ceiling_and_zero_share():
     assert "tp-2" in joined and "为 0" in joined and "未接入" in joined
     # 缺测探针可以出现在覆盖率提示里，但不得出现在量程封顶提示中
     assert all("tp-3" not in note for note in notes if "量程封顶" in note)
+
+
+def test_channel_cross_correlation_aligns_minutes():
+    stamps = pd.date_range("2026-10-09", periods=60, freq="1min")
+    rising = np.linspace(10.0, 20.0, stamps.size)
+    idle = np.zeros(stamps.size)
+    frames = {
+        "温度": pd.DataFrame({"ts": stamps, "探针": "tp-1", "数值": rising}),
+        "湿度": pd.DataFrame({"ts": stamps, "探针": "tp-1", "数值": 2 * rising}),
+        "能见度": pd.DataFrame({"ts": stamps, "探针": "tp-1", "数值": rising[::-1]}),
+        # 全程为 0 的失效探针不应参与通道中位数
+        "风速": pd.concat(
+            [
+                pd.DataFrame({"ts": stamps, "探针": "tp-1", "数值": rising}),
+                pd.DataFrame({"ts": stamps, "探针": "tp-2", "数值": idle}),
+            ],
+            ignore_index=True,
+        ),
+    }
+    matrix = channel_cross_correlation(frames)
+
+    assert list(matrix["通道"]) == ["温度", "湿度", "能见度", "风速"]
+    assert matrix.loc[0, "湿度"] == pytest.approx(1.0)
+    assert matrix.loc[0, "能见度"] == pytest.approx(-1.0)
+    assert matrix.loc[0, "风速"] == pytest.approx(1.0)
+    best = strongest_correlation(matrix)
+    assert best is not None and best[0] == "温度" and abs(best[2]) == pytest.approx(1.0)
+
+
+def test_channel_cross_correlation_needs_two_channels():
+    stamps = pd.date_range("2026-10-09", periods=10, freq="1min")
+    single = pd.DataFrame({"ts": stamps, "探针": "tp-1", "数值": np.arange(10.0)})
+    assert channel_cross_correlation({"温度": single}).empty
+    assert strongest_correlation(pd.DataFrame()) is None

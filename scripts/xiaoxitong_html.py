@@ -4,7 +4,7 @@
 两份报告：
 
 * ``01_试验数据总览.html``：数据规模、数据形态、试验设计矩阵、参数完备度、
-  击穿行为与重复性、数据质量、全量试验清单。
+  击穿行为与重复性、试验参数趋势与相关性、数据质量、全量试验清单。
 * ``02_时间与大气协同.html``：试验时间结构、大气环境背景、试验窗口与背景对比、
   击穿行为与大气要素的关联、相对试验开始时刻的滞后剖面。
 
@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import html
 import math
+import re
 import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
@@ -668,6 +669,51 @@ def median_or_none(values: list[float]) -> float | None:
     return float(np.median(values)) if values else None
 
 
+def distance_m(exp: base.Experiment) -> float | None:
+    """从归一化距离文本（``600m`` / ``1km``）取米数。"""
+    match = re.search(r"(\d+(?:\.\d+)?)\s*(km|m)", exp.distance or "", flags=re.IGNORECASE)
+    if not match:
+        return None
+    value = float(match.group(1))
+    return value * 1000 if match.group(2).lower() == "km" else value
+
+
+def fan_number(exp: base.Experiment) -> float | None:
+    """从风机描述取台数；未记录返回 ``None``。"""
+    text = (exp.fan_count or "").strip()
+    if not text or text == "未记录":
+        return None
+    if text == "0" or text.startswith("无"):
+        return 0.0
+    match = re.search(r"\d+", text)
+    return float(match.group(0)) if match else None
+
+
+def linear_trend(xs: list[float], ys: list[float]) -> tuple[float, float] | None:
+    """最小二乘趋势线（斜率、截距），样本不足或退化时返回 ``None``。"""
+    if len(xs) < 3 or len(xs) != len(ys) or len(set(xs)) < 2:
+        return None
+    try:
+        slope, intercept = np.polyfit(xs, ys, 1)
+    except Exception:  # pragma: no cover - 数值异常时退化为无趋势线
+        return None
+    if not np.isfinite(slope) or not np.isfinite(intercept):
+        return None
+    return float(slope), float(intercept)
+
+
+def _clean_pairs(pairs: list[tuple[float | None, float | None]]) -> tuple[list[float], list[float]]:
+    xs, ys = [], []
+    for x_value, y_value in pairs:
+        if x_value is None or y_value is None:
+            continue
+        if not math.isfinite(x_value) or not math.isfinite(y_value):
+            continue
+        xs.append(float(x_value))
+        ys.append(float(y_value))
+    return xs, ys
+
+
 def period_word(moment: datetime) -> str:
     """把时刻归到半天粒度，用于生成不含硬编码时间的文字说明。"""
     hour = moment.hour
@@ -747,8 +793,10 @@ def overview_report(experiments: list[base.Experiment], root: Path, generated: d
         '<li><a href="#s2">试验设计矩阵</a></li>'
         '<li><a href="#s3">参数完备度与数据质量</a></li>'
         '<li><a href="#s4">击穿行为与重复性</a></li>'
-        '<li><a href="#s5">全量试验清单</a></li>'
-        '<li><a href="#s6">附录：口径与产物</a></li>'
+        '<li><a href="#s5">参数与结果的趋势分析</a></li>'
+        '<li><a href="#s6">参数与结果的相关性分析</a></li>'
+        '<li><a href="#s7">全量试验清单</a></li>'
+        '<li><a href="#s8">附录：口径与产物</a></li>'
         "</ol></div>"
     )
 
@@ -1034,6 +1082,7 @@ def overview_report(experiments: list[base.Experiment], root: Path, generated: d
                         title="击穿时间随试验次序的分布",
                         x_label="试验次序（按实验目录顺序）",
                         y_label="击穿时间 (s)",
+                        trend=linear_trend([point[0] for point in points], [point[1] for point in points]),
                     ),
                     "横轴为试验次序（跨三天连续编号），纵轴为记录到的击穿时刻。"
                     "次序跨度同时混合了距离、风机与待机方式的改变，不能单独解释为时间漂移。",
@@ -1074,8 +1123,166 @@ def overview_report(experiments: list[base.Experiment], root: Path, generated: d
             )
         )
 
-    # ---- 5. 清单 ----
-    body.append('<h2 id="s5">5. 全量试验清单</h2>')
+    # ---- 5. 趋势分析 ----
+    body.append('<h2 id="s5">5. 参数与结果的趋势分析</h2>')
+    body.append(
+        "<p>把试验按日期与目录次序排列，观察击穿时间与试验参数是否随时间移动。"
+        "次序跨度同时混合了距离、功率档位、风机与待机方式的改变，"
+        "下面的趋势量只描述本次批次内的先后变化，不把次序本身当作原因。</p>"
+    )
+    daily_rows = []
+    day_medians: list[tuple[datetime, float]] = []
+    for day in days:
+        day_outcomes = [item for item in outcomes if item.exp.date == day]
+        values = [item.breakdown_s for item in day_outcomes if item.breakdown_s is not None]
+        median = median_or_none(values)
+        if median is not None:
+            day_medians.append((datetime.strptime(day, "%Y%m%d") + timedelta(hours=12), median))
+        daily_rows.append(
+            [
+                f"{day[:4]}-{day[4:6]}-{day[6:]}",
+                len(day_outcomes),
+                len(values),
+                num(median, 2) if median is not None else "—",
+                num(min(values), 2) if values else "—",
+                num(max(values), 2) if values else "—",
+            ]
+        )
+    body.append(
+        table(
+            ["日期", "试验次数", "有效击穿时间", "中位 (s)", "最短 (s)", "最长 (s)"],
+            daily_rows,
+            numeric={1, 2, 3, 4, 5},
+            caption="各日击穿时间概览（仅数值子集）",
+        )
+    )
+    if len(day_medians) >= 2:
+        body.append(
+            figure(
+                line_panel(
+                    [("击穿时间中位", day_medians, PALETTE[0])],
+                    title="各日击穿时间中位数走势",
+                    y_label="击穿时间 (s)",
+                    x_start=datetime.strptime(days[0], "%Y%m%d"),
+                    x_end=datetime.strptime(days[-1], "%Y%m%d") + timedelta(days=1),
+                    tick_hours=24,
+                ),
+                "折线连接各日有效击穿时间的中位数；日间点数不同，线段只表示先后位置。",
+            )
+        )
+    order = {exp.exp_id: index + 1 for index, exp in enumerate(experiments)}
+    trend_specs = [
+        ("击穿时间 (s)", [(order[item.exp.exp_id], item.breakdown_s) for item in outcomes]),
+        ("作用距离 (m)", [(order[exp.exp_id], distance_m(exp)) for exp in experiments]),
+        ("设定时长 (s)", [(order[item.exp.exp_id], item.duration_s) for item in outcomes]),
+        ("风机台数", [(order[exp.exp_id], fan_number(exp)) for exp in experiments]),
+    ]
+    trend_rows = []
+    for label, pairs in trend_specs:
+        xs, ys = _clean_pairs(pairs)
+        result = _spearman(xs, ys)
+        if result is None:
+            trend_rows.append([label, len(xs), "—", "—", "样本不足"])
+            continue
+        rho, p_value, count = result
+        direction = "上升" if rho > 0 else "下降" if rho < 0 else "无方向"
+        trend_rows.append(
+            [label, count, num(rho, 3), p_text(p_value), f"{direction}{'（p<0.05）' if p_value < 0.05 else ''}"]
+        )
+    body.append(
+        table(
+            ["观察量", "样本", "Spearman ρ（对次序）", "p 值", "ρ 方向"],
+            trend_rows,
+            numeric={1, 2},
+            caption="各量随试验次序的单调趋势（描述性）",
+        )
+    )
+    body.append(
+        '<p class="note">Spearman ρ 的符号表示随次序同向或反向变化，绝对值是单调趋势强度；'
+        "样本量小且未做多重比较校正，仅供批次内对比，不代表时间造成参数或击穿结果改变。</p>"
+    )
+
+    # ---- 6. 相关性分析 ----
+    body.append('<h2 id="s6">6. 参数与结果的相关性分析</h2>')
+    numeric_samples = [item for item in outcomes if item.breakdown_s is not None]
+    body.append(
+        f"<p>同时具备数值击穿时刻与试验参数的样本共 {len(numeric_samples)} 次。"
+        "下表给出击穿时间与各数值参数的 Spearman 秩相关；缺失项按对剔除，"
+        "两组比较只纳入有数值击穿时刻的试验。</p>"
+    )
+    corr_specs = [
+        ("作用距离 (m)", lambda item: distance_m(item.exp)),
+        ("设定时长 (s)", lambda item: item.duration_s),
+        ("风机台数", lambda item: fan_number(item.exp)),
+        ("采集文件数", lambda item: float(item.exp.total_files)),
+        ("采集窗口时长 (min)", lambda item: item.window_minutes),
+    ]
+    corr_rows = []
+    for label, getter in corr_specs:
+        xs, ys = _clean_pairs([(getter(item), item.breakdown_s) for item in numeric_samples])
+        result = _spearman(xs, ys)
+        if result is None:
+            corr_rows.append([label, len(xs), "—", "—", "样本不足"])
+            continue
+        rho, p_value, count = result
+        corr_rows.append([label, count, num(rho, 3), p_text(p_value), "是" if p_value < 0.05 else "否"])
+    body.append(
+        table(
+            ["试验因素", "样本", "Spearman ρ", "p 值", "p<0.05"],
+            corr_rows,
+            numeric={1, 2},
+            caption="击穿时间与试验参数的秩相关（仅数值子集，描述性）",
+        )
+    )
+
+    def fan_config(item: Outcome) -> str:
+        count = fan_number(item.exp)
+        if count is None:
+            return "未记录"
+        return "有风机" if count > 0 else "无风机"
+
+    group_specs = [
+        ("功率档位", "标准功率", "低功率", lambda item: item.exp.power),
+        ("入射方式", "正入射", "斜入射", lambda item: item.exp.incident_direction),
+        ("风机配置", "有风机", "无风机", fan_config),
+        ("待机方式", "热待机", "冷待机", lambda item: item.exp.standby),
+    ]
+    comparison_rows = []
+    for label, first_name, second_name, getter in group_specs:
+        first = [item.breakdown_s for item in numeric_samples if getter(item) == first_name]
+        second = [item.breakdown_s for item in numeric_samples if getter(item) == second_name]
+        first_cell = (
+            f"{first_name}（{len(first)}，中位 {num(median_or_none(first), 2)}s）" if first else f"{first_name}（0，—）"
+        )
+        second_cell = (
+            f"{second_name}（{len(second)}，中位 {num(median_or_none(second), 2)}s）"
+            if second
+            else f"{second_name}（0，—）"
+        )
+        result = _mwu(first, second)
+        if result is None:
+            comparison_rows.append([label, first_cell, second_cell, "—", "—", "样本不足"])
+            continue
+        u_stat, p_value = result
+        comparison_rows.append(
+            [label, first_cell, second_cell, num(u_stat, 1), p_text(p_value), "是" if p_value < 0.05 else "否"]
+        )
+    body.append(
+        table(
+            ["分组维度", "A 组（n / 中位 s）", "B 组（n / 中位 s）", "U", "p 值", "p<0.05"],
+            comparison_rows,
+            numeric=set(),
+            caption="两组击穿时间比较（Mann-Whitney U，仅数值子集）",
+        )
+    )
+    body.append(
+        '<p class="note">相关与组间差异均为描述性统计：击穿文本中的“未击穿”等按右删失处理，'
+        "不进入数值统计；p 值未做多重比较校正，样本量小，不能据此推断因果关系。"
+        "功率只以档位代号参与分组，绝对功率数值不写入报告。</p>"
+    )
+
+    # ---- 7. 清单 ----
+    body.append('<h2 id="s7">7. 全量试验清单</h2>')
     rows = []
     for outcome in outcomes:
         exp = outcome.exp
@@ -1103,8 +1310,8 @@ def overview_report(experiments: list[base.Experiment], root: Path, generated: d
         )
     )
 
-    # ---- 6. 附录 ----
-    body.append('<h2 id="s6">6. 附录：口径与产物</h2>')
+    # ---- 8. 附录 ----
+    body.append('<h2 id="s8">8. 附录：口径与产物</h2>')
     body.append(
         '<div class="appendix"><ul>'
         "<li><strong>数据来源</strong>：小系统外场试验数据，按试验日期分目录存放；"
@@ -1115,6 +1322,8 @@ def overview_report(experiments: list[base.Experiment], root: Path, generated: d
         "“未击穿”“未明显观察出”“很多小孔”等文本按右删失处理，不计入数值统计。</li>"
         "<li><strong>距离推断</strong>：参数表与目录名均无距离时，若同日其它试验只有一个距离，"
         "则沿用该距离并标注星号。</li>"
+        "<li><strong>趋势与相关性</strong>：Spearman 与 Mann-Whitney U 均为描述性统计，样本按对剔除、"
+        "p 值未做多重比较校正，不推断因果关系；功率仅以档位代号参与分组。</li>"
         "<li><strong>重复组</strong>：以“日期 + 类型 + 功率档位 + 距离 + 入射 + 材料 + 厚度 + 抛光 + 时长 + "
         "待机 + 精跟踪 + 风机”作为参数签名，签名相同即归为同一重复组。</li>"
         "</ul></div>"
@@ -1190,6 +1399,8 @@ def collect_windows(
 def _spearman(xs: list[float], ys: list[float]) -> tuple[float, float, int] | None:
     if len(xs) != len(ys) or len(xs) < 6:
         return None
+    if len(set(xs)) < 2 or len(set(ys)) < 2:
+        return None
     try:
         from scipy import stats
 
@@ -1210,7 +1421,7 @@ def _mwu(first: list[float], second: list[float]) -> tuple[float, float] | None:
         result = stats.mannwhitneyu(first, second, alternative="two-sided")
     except Exception:  # pragma: no cover
         return None
-    if not np.isfinite(result.statistic):
+    if not np.isfinite(result.statistic) or not np.isfinite(result.pvalue):
         return None
     return float(result.statistic), float(result.pvalue)
 

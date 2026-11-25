@@ -155,6 +155,45 @@ def test_overview_report_escapes_markup_and_masks_power() -> None:
     assert "未击穿/难观测" in report
 
 
+def test_overview_renders_trend_and_correlation_sections() -> None:
+    experiments = []
+    for index in range(8):
+        day = "20261009" if index < 4 else "20261010"
+        experiments.append(
+            make_exp(
+                date=day,
+                seq=index + 1,
+                breakdown=f"{3.0 + index * 0.2:.2f}s",
+                distance=f"{600 + index * 50}m",
+                duration=f"{5 + index}s",
+                fan_count="0" if index < 4 else "2 台风机",
+                power="标准功率" if index % 2 == 0 else "低功率",
+                incident_direction="正入射" if index % 2 == 0 else "斜入射",
+                standby="热待机" if index % 2 == 0 else "冷待机",
+                capture_start=datetime(2026, 10, 9 + index // 4, 9, 0),
+                capture_end=datetime(2026, 10, 9 + index // 4, 9, 0, 30),
+            )
+        )
+    report = html.overview_report(experiments, Path("data/小系统"), datetime(2026, 11, 25, 19, 0))
+    for anchor in ("s5", "s6", "s7", "s8"):
+        assert f'id="{anchor}"' in report
+    for chapter in ("参数与结果的趋势分析", "参数与结果的相关性分析", "各日击穿时间中位数走势", "Mann-Whitney U"):
+        assert chapter in report
+    assert "500W" not in report
+    assert "5000W" not in report
+    assert "p = <" not in report
+    assert html.distance_m(experiments[0]) == 600.0
+    assert html.fan_number(experiments[0]) == 0.0
+    assert html.fan_number(experiments[4]) == 2.0
+
+
+def test_trend_helpers_handle_short_and_degenerate_series() -> None:
+    assert html.linear_trend([1.0, 2.0, 3.0], [2.0, 4.0, 6.0]) == pytest.approx((2.0, 0.0))
+    assert html.linear_trend([1.0, 1.0, 1.0], [2.0, 4.0, 6.0]) is None
+    assert html.linear_trend([1.0, 2.0], [2.0, 4.0]) is None
+    assert html._clean_pairs([(1.0, 2.0), (None, 3.0), (3.0, None)]) == ([1.0], [2.0])
+
+
 def test_synergy_report_renders_sections_without_raw_less_than() -> None:
     start = datetime(2026, 10, 9, 9, 0)
     series = minute_series([0.05] * 180 + [0.9] * 60, start)

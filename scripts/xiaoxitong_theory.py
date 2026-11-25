@@ -13,6 +13,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from xiaoxitong_config import env_float
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data" / "小系统"
@@ -20,10 +21,17 @@ REPORT_DIR = DATA_DIR / "试验报告"
 TABLE_CSV = REPORT_DIR / "试验参数总表.csv"
 
 # ---------------------------------------------------------------- 物理常数
-LAMBDA = 1.064e-6  # 波长 [m]（试验未记录，按 Nd:YAG 基频取值）
+# 激光参数从 .env 读取：数值仅用于内部计算，不写入产物
+LAMBDA = env_float("XXT_LAMBDA_M")  # 波长 [m]（试验未记录，按近红外常用波段假设）
 K_WAVE = 2.0 * math.pi / LAMBDA  # 波数 [rad/m]
-P_STD = 5000.0  # 标准功率 [W]
-P_LOW = 500.0  # 低功率 [W]
+P_STD = env_float("XXT_POWER_STD_W")  # 标准功率 [W]
+P_LOW = env_float("XXT_POWER_LOW_W")  # 低功率 [W]
+
+# 反演光斑几何缺省值（仅当数据不足以拟合时使用）
+FALLBACK_SPOT_D0_MM = env_float("XXT_SPOT_D0_MM")
+FALLBACK_SPOT_THETA_URAD = env_float("XXT_SPOT_THETA_URAD")
+FALLBACK_SPREAD_D0_MM = env_float("XXT_SPREAD_D0_MM")
+FALLBACK_SPREAD_THETA_URAD = env_float("XXT_SPREAD_THETA_URAD")
 
 # 不锈钢 304 热物性
 RHO_STEEL = 7900.0  # 密度 [kg/m3]
@@ -39,7 +47,7 @@ ABSORPTANCE = {"抛光": 0.35, "未记录": 0.40, "氧化/粗糙": 0.60}
 RHO_CP_AIR = 1200.0  # 体积热容 [J/(m3.K)]
 DN_DT_AIR = -1.0e-6  # 折射率温度系数 [1/K]（负值 -> 热散焦）
 
-# 1.064 um 消光系数情景 [1/m]
+# 该波段消光系数情景 [1/m]
 EXTINCTION = {"洁净": 1.0e-5, "霾/轻雾": 5.0e-5, "浓霾": 2.0e-4}
 
 # 湍流折射率结构常数情景 [m^-2/3]
@@ -115,8 +123,8 @@ def blooming_table(fit: dict[str, float]) -> pd.DataFrame:
 
     半径取第 4 节反演光斑直径拟合 d(L)=d0+theta*L 的一半，保证与湍流扩展表同一几何口径。
     """
-    d0_mm = fit.get("d0_mm", 9.5) if fit else 9.5
-    theta_urad = fit.get("theta_urad", 16.1) if fit else 16.1
+    d0_mm = fit.get("d0_mm", FALLBACK_SPOT_D0_MM) if fit else FALLBACK_SPOT_D0_MM
+    theta_urad = fit.get("theta_urad", FALLBACK_SPOT_THETA_URAD) if fit else FALLBACK_SPOT_THETA_URAD
     rows = []
     for path in (200.0, 600.0, 1000.0):
         radius = 0.5 * (d0_mm * 1e-3 + theta_urad * 1e-6 * path)
@@ -242,8 +250,8 @@ def geometry_fit(melt: pd.DataFrame) -> dict[str, float]:
 def turbulence_spread_table(fit: dict[str, float]) -> pd.DataFrame:
     """几何光斑叠加湍流长期扩展: sigma_LT = 2L/(k r0)."""
     rows = []
-    d0 = fit.get("d0_mm", 8.0) if fit else 8.0
-    theta = fit.get("theta_urad", 20.0) if fit else 20.0
+    d0 = fit.get("d0_mm", FALLBACK_SPREAD_D0_MM) if fit else FALLBACK_SPREAD_D0_MM
+    theta = fit.get("theta_urad", FALLBACK_SPREAD_THETA_URAD) if fit else FALLBACK_SPREAD_THETA_URAD
     for cname, cn2 in CN2.items():
         for path in (200.0, 600.0, 1000.0):
             r0 = fried_r0(cn2, path)
@@ -309,7 +317,7 @@ def write_report(
     lines.append("# 理论计算汇总（小系统试验）\n")
     lines.append(
         "激光工作于近红外常用波段；功率为「标准功率 / 低功率」两档。按脱敏要求，波长、口径、发散角、"
-        "脉宽、重频、功率密度、能量等激光参数均以文字描述、不记录具体数值，数值仅存于脚本内部常量。"
+        "脉宽、重频、功率密度、能量等激光参数均以文字描述、不记录具体数值，数值只存于项目根目录 `.env`（由 `scripts/xiaoxitong_config.py` 读取），不写入任何产物。"
     )
     lines.append("以下表格由 `scripts/xiaoxitong_theory.py` 自动生成，公式来源见《参考文献表.md》。")
     lines.append("所有数值均为情景计算：输入量（Cn2、消光系数、吸收率、效率因子）取文献典型范围，非本试验实测。\n")
@@ -378,8 +386,8 @@ def write_report(
 
     lines.append("## 8. 结论性量级\n")
     lines.append("- 击穿时间的主导项是靶面有效功率密度，不是大气消光；")
-    d200 = fit.get("d0_mm", 9.5) + fit.get("theta_urad", 16.1) * 1e-3 * 200.0
-    d1000 = fit.get("d0_mm", 9.5) + fit.get("theta_urad", 16.1) * 1e-3 * 1000.0
+    d200 = fit.get("d0_mm", FALLBACK_SPOT_D0_MM) + fit.get("theta_urad", FALLBACK_SPOT_THETA_URAD) * 1e-3 * 200.0
+    d1000 = fit.get("d0_mm", FALLBACK_SPOT_D0_MM) + fit.get("theta_urad", FALLBACK_SPOT_THETA_URAD) * 1e-3 * 1000.0
     area_ratio = (d1000 / d200) ** 2
     t_geom = 3.40 * area_ratio
     t_turb = t_geom * 1.28

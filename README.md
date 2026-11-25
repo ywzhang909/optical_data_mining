@@ -115,6 +115,13 @@ uv run ruff format src/ ui/analysis/ --check
 - 3D Plotly 表面可视化（光轴 vs 理想 vs 光瞳）
 - 结果汇总表 + CSV 导出
 
+### 数据报告脚本（`scripts/`）
+
+| 脚本 | 说明 |
+|---|---|
+| `xiaoxitong_report.py` / `xiaoxitong_atm.py` / `xiaoxitong_html.py` | 小系统外场试验数据解析、大气协同统计与自包含 HTML 报告，详见 [docs/小系统试验数据报告.md](docs/小系统试验数据报告.md) |
+| `thermo_*` | 温度脉动仪数据报告与自动化，详见 [docs/温度脉动仪数据报告.md](docs/温度脉动仪数据报告.md) |
+
 ## 代码审计与重构
 
 项目已通过以下代码质量改进：

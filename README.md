@@ -119,7 +119,7 @@ uv run ruff format src/ ui/analysis/ --check
 
 | 脚本 | 说明 |
 |---|---|
-| `xiaoxitong_report.py` / `xiaoxitong_atm.py` / `xiaoxitong_html.py` | 小系统外场试验数据解析、大气协同统计与自包含 HTML 报告，详见 [docs/小系统试验数据报告.md](docs/小系统试验数据报告.md) |
+| `xiaoxitong_report.py` / `xiaoxitong_atm.py` / `xiaoxitong_html.py` / `xiaoxitong_run_all.py` | 小系统外场试验数据解析、大气协同统计、自包含 HTML 报告与一键生成（兼容数据错误），详见 [docs/小系统试验数据报告.md](docs/小系统试验数据报告.md) |
 | `thermo_*` | 温度脉动仪数据报告与自动化，详见 [docs/温度脉动仪数据报告.md](docs/温度脉动仪数据报告.md) |
 
 ## 代码审计与重构

@@ -30,6 +30,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from xiaoxitong_config import env_float
+
 DATE_RE = re.compile(r"^\d{8}$")
 CAPTURE_RE = re.compile(r"(\d{8})_(\d{14})_(\d{14})_(\d{6})")
 DAT_RE = re.compile(r"^(\d{6})\.dat$", re.IGNORECASE)
@@ -40,6 +42,8 @@ ANGLE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:°|度)")
 FAN_RE = re.compile(r"([一二两三四五六七八九十\d]+)\s*个风机[^\s，,;；]*")
 FAN_FREQ_RE = re.compile(r"(?:风机)?频率\s*[:：]?\s*(\d+(?:\.\d+)?\s*(?:Hz|hz))")
 POWER_RE = re.compile(r"\d+(?:\.\d+)?\s*(?:kW|KW|kw|W|w)(?![a-zA-Z])")
+POWER_STD_LABEL = f"{env_float('XXT_POWER_STD_W'):.0f}W"
+POWER_LOW_LABEL = f"{env_float('XXT_POWER_LOW_W'):.0f}W"
 
 CN_NUM = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
 
@@ -80,7 +84,7 @@ def sanitize_power(text: str) -> str:
     """隐藏任何具体功率数值。"""
     if not text:
         return ""
-    text = text.replace("5000W", "标准功率").replace("500W", "低功率")
+    text = text.replace(POWER_STD_LABEL, "标准功率").replace(POWER_LOW_LABEL, "低功率")
     return POWER_RE.sub("功率（已脱敏）", text)
 
 
@@ -355,12 +359,19 @@ def parse_experiment(date: str, exp_dir: Path) -> Experiment:
     starts: list[datetime] = []
     ends: list[datetime] = []
     capture_ids: set[str] = set()
+    bad_timestamps = 0
     for path in exp_dir.rglob("*"):
         match = CAPTURE_RE.search(path.name)
         if match:
+            try:
+                start = datetime.strptime(match.group(2), "%Y%m%d%H%M%S")
+                end = datetime.strptime(match.group(3), "%Y%m%d%H%M%S")
+            except ValueError:
+                bad_timestamps += 1
+                continue
             capture_ids.add(match.group(0))
-            starts.append(datetime.strptime(match.group(2), "%Y%m%d%H%M%S"))
-            ends.append(datetime.strptime(match.group(3), "%Y%m%d%H%M%S"))
+            starts.append(start)
+            ends.append(end)
     dat_times: list[datetime] = []
     for path in exp_dir.glob("*.dat"):
         match = DAT_RE.match(path.name)
@@ -377,6 +388,7 @@ def parse_experiment(date: str, exp_dir: Path) -> Experiment:
         capture_source = "DAT 文件名时刻"
         capture_segments = len(dat_times)
     else:
+        capture_start = capture_end = None
         capture_source, capture_segments = "", 0
 
     exp = Experiment(
@@ -414,6 +426,8 @@ def parse_experiment(date: str, exp_dir: Path) -> Experiment:
         total_size=total_size,
     )
 
+    if bad_timestamps:
+        exp.quality.append(f"{bad_timestamps} 个采集文件名时间戳无效，已忽略")
     # 目录名与参数表时间不一致
     if exp.duration_source.startswith("参数表"):
         named = DURATION_RE.search(name)
@@ -548,13 +562,24 @@ def annotate_duplicates(experiments: list[Experiment]) -> None:
                 exp.duplicates = [other.exp_id for other in group if other is not exp]
 
 
-def build_experiments(root: Path) -> list[Experiment]:
+def build_experiments(root: Path, issues: list[str] | None = None) -> list[Experiment]:
+    """扫描全部试验目录；单个目录出错时记录到 ``issues`` 并继续。"""
     experiments: list[Experiment] = []
     for date_dir in sorted(path for path in root.iterdir() if path.is_dir()):
         if not DATE_RE.fullmatch(date_dir.name):
             continue
-        for exp_dir in sorted(path for path in date_dir.iterdir() if path.is_dir()):
-            experiments.append(parse_experiment(date_dir.name, exp_dir))
+        try:
+            candidates = sorted(path for path in date_dir.iterdir() if path.is_dir())
+        except OSError as exc:
+            if issues is not None:
+                issues.append(f"{date_dir.name}/: 目录不可读（{exc}）")
+            continue
+        for exp_dir in candidates:
+            try:
+                experiments.append(parse_experiment(date_dir.name, exp_dir))
+            except Exception as exc:  # 单个坏目录不应中断整批报告
+                if issues is not None:
+                    issues.append(f"{date_dir.name}/{exp_dir.name}: 解析失败（{type(exc).__name__}: {exc}）")
     infer_distance(experiments)
     annotate_duplicates(experiments)
     return experiments

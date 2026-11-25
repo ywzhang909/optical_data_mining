@@ -118,19 +118,27 @@ def minute_median_table(root: Path, channel: Channel, day: str) -> pd.DataFrame:
 
     frames = []
     for source in files:
-        minute = load_aux_minute_means(
-            source,
-            MINUTE_RULE,
-            value_min=channel.vmin,
-            value_max=channel.vmax,
-            cache_dir=None,
-        )
+        try:
+            minute = load_aux_minute_means(
+                source,
+                MINUTE_RULE,
+                value_min=channel.vmin,
+                value_max=channel.vmax,
+                cache_dir=None,
+            )
+        except Exception as exc:  # 单个损坏的 CSV 不应让整天整通道失效
+            logger.warning("跳过异常大气文件 {}（{}）", Path(source.path).name, exc)
+            continue
         if not minute.empty:
             frames.append(minute)
     if not frames:
         return pd.DataFrame(columns=["中位", "探针数"])
 
     stacked = pd.concat(frames, ignore_index=True)
+    stacked["数值"] = pd.to_numeric(stacked["数值"], errors="coerce")
+    stacked = stacked.replace([np.inf, -np.inf], np.nan).dropna(subset=["数值"])
+    if stacked.empty:
+        return pd.DataFrame(columns=["中位", "探针数"])
     grouped = stacked.groupby("ts", observed=True)["数值"]
     table = pd.DataFrame({"中位": grouped.median(), "探针数": grouped.count()})
     table.index = pd.to_datetime(table.index)
@@ -168,12 +176,21 @@ def load_day_channel(
         except (OSError, ValueError):
             meta = {}
         if meta.get("fingerprint") == fingerprint:
-            logger.debug("命中大气缓存 {} {}", channel.key, day)
-            return pd.read_parquet(data_path)
+            try:
+                cached = pd.read_parquet(data_path)
+                if not {"中位", "探针数"}.issubset(cached.columns):
+                    raise ValueError("缓存列不完整")
+                logger.debug("命中大气缓存 {} {}", channel.key, day)
+                return cached
+            except Exception as exc:  # 缓存损坏时回退原始文件
+                logger.warning("大气缓存不可用（{} {}：{}），回退原始文件", channel.key, day, exc)
 
     table = minute_median_table(root, channel, day)
-    table.to_parquet(data_path)
-    meta_path.write_text(json.dumps({"fingerprint": fingerprint, "rows": int(len(table))}), encoding="utf-8")
+    try:
+        table.to_parquet(data_path)
+        meta_path.write_text(json.dumps({"fingerprint": fingerprint, "rows": int(len(table))}), encoding="utf-8")
+    except (OSError, ValueError, ImportError) as exc:  # 缓存只加速，不应影响分析
+        logger.warning("大气缓存写入失败（{} {}：{}）", channel.key, day, exc)
     return table
 
 
@@ -190,7 +207,11 @@ def load_channels(
     for channel in channels:
         parts = []
         for day in days:
-            table = load_day_channel(root, channel, day, cache_dir, refresh=refresh)
+            try:
+                table = load_day_channel(root, channel, day, cache_dir, refresh=refresh)
+            except Exception as exc:  # 单日失败不拖累其它日期
+                logger.warning("大气通道 {} 在 {} 读取失败，已跳过：{}", channel.key, day, exc)
+                continue
             if not table.empty:
                 parts.append(table)
         merged = pd.concat(parts) if parts else pd.DataFrame(columns=["中位", "探针数"])

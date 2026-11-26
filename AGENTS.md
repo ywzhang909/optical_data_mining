@@ -22,7 +22,7 @@ CI (`.github/workflows/ci.yml`) only does `pip install -e .` then import-verific
 
 ## Package boundaries
 
-- **`data_mining` (pip-installable)** lives at `src/data_mining/`. Contains only `input_sources/` (`InputSource` ABC in `base_input.py` + Kafka/RabbitMQ/Filesystem/Zip). Every consumer returns `pd.DataFrame`. `kafka-python`/`pika` are optional deps (`[project.optional-dependencies]` kafka/rabbitmq), try/except guarded.
+- **`data_mining` (pip-installable)** lives at `src/data_mining/`. It contains `input_sources/` (`InputSource` ABC in `base_input.py` + Kafka/RabbitMQ/Filesystem/Zip; every consumer returns `pd.DataFrame`; `kafka-python`/`pika` are optional deps, try/except guarded) and `xiaoxitong/` (小系统试验报告的一键生成模块：`run_all` 入口 + `report`/`atm`/`html`/`config` 及旧版 Markdown 报告模块，运行方式 `uv run python -m data_mining.xiaoxitong.run_all`).
 - **`ui/analysis/`** holds the beam algorithms — NOT part of the installable package. `ui/analysis/optical_analysis/` = `beam_analysis.py` (D4σ, PIB, BPP, M²), `diffraction.py` (Strehl/Fresnel, needs aotools), `beam_analysis_metrics.py`, `history_manager.py`, `uniform_analysis.py`, `zernike_analysis.py`, `visualization/`. `ui/analysis/image/common.py` = image I/O + profiles.
 - pytest is configured with `pythonpath = ["src", "ui"]` (pyproject `[tool.pytest.ini_options]`), so `analysis.*` is importable in tests without manual sys.path setup.
 

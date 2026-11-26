@@ -12,9 +12,9 @@
 数据来源以"小系统外场试验数据"指代。所有图表为内联 SVG，报告单文件可离线打开。
 
 Usage:
-    uv run python scripts/xiaoxitong_html.py
-    uv run python scripts/xiaoxitong_html.py --root data/小系统 --out data/小系统/试验报告/html
-    uv run python scripts/xiaoxitong_html.py --skip-atmosphere   # 只出总览报告
+    uv run python -m data_mining.xiaoxitong.html
+    uv run python -m data_mining.xiaoxitong.html --root data/小系统 --out data/小系统/试验报告/html
+    uv run python -m data_mining.xiaoxitong.html --skip-atmosphere   # 只出总览报告
 """
 
 from __future__ import annotations
@@ -23,7 +23,6 @@ import argparse
 import html
 import math
 import re
-import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -33,9 +32,8 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import xiaoxitong_atm as atm  # noqa: E402
-import xiaoxitong_report as base  # noqa: E402
+from . import atm
+from . import report as base
 
 DEFAULT_ROOT = Path("data/小系统")
 DEFAULT_OUT = Path("data/小系统/试验报告/html")
@@ -58,9 +56,14 @@ def num(value: float | None, digits: int = 2) -> str:
         return "—"
     if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
         return "—"
+    if value == 0:
+        value = 0.0
     if abs(value) >= 1e5 or (abs(value) < 1e-3 and value != 0):
         return f"{value:.{digits}e}"
-    return f"{value:.{digits}f}"
+    text = f"{value:.{digits}f}"
+    if text.startswith("-") and float(text) == 0.0:
+        text = text[1:]
+    return text
 
 
 def pct(value: float | None, digits: int = 1) -> str:
@@ -1426,6 +1429,60 @@ def _mwu(first: list[float], second: list[float]) -> tuple[float, float] | None:
     return float(result.statistic), float(result.pvalue)
 
 
+LAG_OFFSETS = (-60, -50, -40, -30, -20, -10, 0, 10, 20)
+
+
+def quartile_range(values: list[float]) -> float | None:
+    """四分位距（Q3−Q1）；少于 3 个有效值或退化时返回 ``None``。"""
+    clean = [float(value) for value in values if value is not None and np.isfinite(value)]
+    if len(clean) < 3:
+        return None
+    low, high = np.percentile(clean, [25, 75])
+    spread = float(high - low)
+    return spread if np.isfinite(spread) else None
+
+
+def lag_value(
+    series: pd.Series,
+    moment: datetime,
+    offset_minutes: int,
+    *,
+    bin_minutes: int = 10,
+) -> float | None:
+    """取 ``[moment + offset, moment + offset + bin)`` 内的中位，无覆盖返回 ``None``。"""
+    if series is None or series.empty:
+        return None
+    start = moment + timedelta(minutes=offset_minutes)
+    end = start + timedelta(minutes=bin_minutes)
+    window = series.loc[(series.index >= start) & (series.index < end)].dropna()
+    if window.empty:
+        return None
+    return float(window.median())
+
+
+def lag_scan(
+    series: pd.Series,
+    samples: list[WindowSample],
+    offsets: tuple[int, ...] = LAG_OFFSETS,
+    *,
+    bin_minutes: int = 10,
+) -> dict[int, tuple[float, float, int] | None]:
+    """逐偏移窗口计算“通道值—击穿时间”的秩相关；不可算的偏移映射为 ``None``。"""
+    result: dict[int, tuple[float, float, int] | None] = {}
+    for offset in offsets:
+        xs: list[float] = []
+        ys: list[float] = []
+        for sample in samples:
+            value = lag_value(series, sample.start, offset, bin_minutes=bin_minutes)
+            seconds = parse_seconds(sample.exp.breakdown or "")
+            if value is None or seconds is None:
+                continue
+            xs.append(value)
+            ys.append(seconds)
+        result[offset] = _spearman(xs, ys)
+    return result
+
+
 def synergy_report(
     experiments: list[base.Experiment],
     channels: dict[str, pd.DataFrame],
@@ -1795,6 +1852,188 @@ def synergy_report(
             "因此风速与湿度的组间差异同时混入了试验设计因素，不能解释为击穿的成因；"
             "未观测组只有 5 次，p 值仅作描述。</p>"
         )
+
+    # 击穿时间随试验次序的趋势
+    body.append("<h3>击穿时间随试验次序的变化</h3>")
+    body.append(
+        "<p>同一天内的试验按采集开始时间排序，次序只表示批次内的先后，不等于等间隔的时间轴。"
+        "逐日给出秩相关与线性斜率：ρ 与斜率都只描述当天的先后关系，单日样本量很小。</p>"
+    )
+    day_order: dict[str, list[WindowSample]] = defaultdict(list)
+    for sample in numeric_samples:
+        day_order[sample.exp.date].append(sample)
+    for day_samples in day_order.values():
+        day_samples.sort(key=lambda item: item.exp.capture_start)
+    order_rows = []
+    scatter_points: list[tuple[float, float, str, str]] = []
+    pooled_x: list[float] = []
+    pooled_y: list[float] = []
+    for index, day in enumerate(sorted(day_order)):
+        day_samples = day_order[day]
+        color = PALETTE[index % len(PALETTE)]
+        orders: list[float] = []
+        seconds_values: list[float] = []
+        for order, sample in enumerate(day_samples, start=1):
+            seconds = parse_seconds(sample.exp.breakdown or "")
+            if seconds is None:
+                continue
+            orders.append(float(order))
+            seconds_values.append(seconds)
+            scatter_points.append((float(order), seconds, f"{day} 第{order}次", color))
+            pooled_x.append(float(order))
+            pooled_y.append(seconds)
+        slope_pair = linear_trend(orders, seconds_values)
+        slope_text = num(slope_pair[0], 2) if slope_pair else "—"
+        result = _spearman(orders, seconds_values)
+        rho_text = num(result[0], 2) if result else "—"
+        p_cell = p_text(result[1]) if result else "—"
+        order_rows.append([day, len(seconds_values), rho_text, slope_text, p_cell])
+    if order_rows:
+        body.append(
+            table(
+                ["日期", "n", "ρ（次序）", "斜率 (s/次)", "p"],
+                order_rows,
+                numeric={1, 2, 3, 4},
+                caption="逐日击穿时间随试验次序的秩相关与线性斜率",
+            )
+        )
+    if scatter_points:
+        body.append(
+            figure(
+                scatter(
+                    scatter_points,
+                    title="击穿时间随试验次序的变化",
+                    x_label="当日试验次序",
+                    y_label="击穿时间 (s)",
+                    trend=linear_trend(pooled_x, pooled_y),
+                ),
+                "各日按采集开始时间排序的击穿时间，颜色区分日期；虚线为全部样本合并后的线性趋势，"
+                "仅作描述，不代表时间本身造成击穿变化。",
+            )
+        )
+    body.append(
+        '<p class="note">ρ 只在当日至少有 6 次数值击穿时计算，斜率需要至少 3 次；'
+        "缺失的格子留空。趋势项不排除设备预热、操作节奏等批次内混杂因素。</p>"
+    )
+
+    # 环境要素相关系数矩阵
+    body.append("<h3>环境要素与击穿时间的秩相关矩阵</h3>")
+    matrix_labels = ["击穿时间"] + [channel.label for channel in active_channels]
+    matrix_values: dict[str, list[float | None]] = {
+        "击穿时间": [parse_seconds(sample.exp.breakdown or "") for sample in numeric_samples]
+    }
+    for channel in active_channels:
+        matrix_values[channel.label] = [sample.values.get(channel.key) for sample in numeric_samples]
+    matrix_rows = []
+    for row_label in matrix_labels:
+        cells = []
+        for col_label in matrix_labels:
+            if row_label == col_label:
+                cells.append("—")
+                continue
+            xs, ys = _clean_pairs(list(zip(matrix_values[row_label], matrix_values[col_label], strict=True)))
+            result = _spearman(xs, ys)
+            cells.append(num(result[0], 2) if result else "—")
+        matrix_rows.append([row_label] + cells)
+    pair_count = len(matrix_labels) * (len(matrix_labels) - 1) // 2
+    body.append(
+        table(
+            matrix_labels,
+            matrix_rows,
+            numeric=set(range(1, len(matrix_labels) + 1)),
+            caption="击穿时间与环境要素的秩相关矩阵（成对剔除，少 6 对不计算）",
+        )
+    )
+    body.append(
+        '<p class="note">'
+        f"矩阵中共有 {pair_count} 对组合，每对都单独检验且未做多重比较校正，"
+        "因此个别较大的 ρ 很可能只是抽样波动；对角线为同一变量，故留空。"
+        "这些数值只用于描述本批数据，不能据此判断因果或给要素排序。</p>"
+    )
+
+    # 分组击穿时间中位数对比
+    body.append("<h3>分组击穿时间中位数对比</h3>")
+    group_specs = [
+        ("风机配置", fan_group),
+        ("作用距离", distance_group),
+        ("功率档位", lambda exp: exp.power or "未记录"),
+    ]
+    group_rows = []
+    for dimension, getter in group_specs:
+        group_values: dict[str, list[float]] = defaultdict(list)
+        for sample in numeric_samples:
+            seconds = parse_seconds(sample.exp.breakdown or "")
+            if seconds is None:
+                continue
+            group_values[getter(sample.exp)].append(seconds)
+        group_items = sorted(group_values.items(), key=lambda pair: (-len(pair[1]), pair[0]))
+        comparison = "—"
+        if len(group_items) == 2 and all(len(values) >= 3 for _, values in group_items):
+            test = _mwu(group_items[0][1], group_items[1][1])
+            if test is not None:
+                comparison = p_text(test[1])
+        for position, (name, values) in enumerate(group_items):
+            if comparison != "—" and position == 0:
+                p_cell = "参照"
+            elif comparison != "—":
+                p_cell = comparison
+            else:
+                p_cell = "—"
+            group_rows.append(
+                [
+                    dimension,
+                    name,
+                    len(values),
+                    num(median_or_none(values), 2),
+                    num(quartile_range(values), 2),
+                    p_cell,
+                ]
+            )
+    if group_rows:
+        body.append(
+            table(
+                ["分组维度", "组别", "n", "中位 (s)", "四分位距", "与参照组 p"],
+                group_rows,
+                numeric={2, 3, 4},
+                caption="按风机配置、作用距离与功率档位分组的击穿时间中位数",
+            )
+        )
+    body.append(
+        '<p class="note">每组取击穿时间的中位数与四分位距；参照组是该维度内样本最多的一组。'
+        "组间 p 只在恰好两组且每组不少于 3 次时用 Mann-Whitney U 计算，其余情形留空。"
+        "分组维度彼此高度混叠，p 值仅作描述，不表示某一因素独立起作用。</p>"
+    )
+
+    # 滞后窗口相关剖面
+    body.append("<h3>滞后窗口的相关剖面</h3>")
+    lag_rows = []
+    for channel in active_channels:
+        frame = channels[channel.key]
+        scan = {} if frame.empty else lag_scan(frame["中位"], numeric_samples)
+        cells = []
+        for offset in LAG_OFFSETS:
+            result = scan.get(offset)
+            if result is None:
+                cells.append("—")
+            else:
+                cells.append(f"{num(result[0], 2)}（{result[2]}）")
+        lag_rows.append([channel.label] + cells)
+    if lag_rows:
+        lag_headers = ["通道"] + [f"{offset:+d} 分" if offset else "0 分" for offset in LAG_OFFSETS]
+        body.append(
+            table(
+                lag_headers,
+                lag_rows,
+                numeric=set(range(1, len(LAG_OFFSETS) + 1)),
+                caption="击穿时间与各通道在不同滞后窗口上的秩相关（窗口宽 10 分钟）",
+            )
+        )
+    body.append(
+        '<p class="note">表格每一格是“该偏移窗口内的通道中位—击穿时间”的秩相关，括号内为配对样本数；'
+        "负值偏移表示试验开始之前、正值表示之后。同一通道跨 9 个偏移反复检验，"
+        f"全表共 {len(active_channels) * len(LAG_OFFSETS)} 次未校正的相关，"
+        "只用于观察是否存在值得复核的时段，不构成滞后效应或因果证据。</p>"
+    )
 
     # ---- 5. 滞后 ----
     body.append('<h2 id="t5">5. 相对试验开始的滞后剖面</h2>')

@@ -10,26 +10,21 @@
 * 默认以「尽力产出」为原则返回 0；``--strict`` 下有任一异常返回 1。
 
 Usage:
-    uv run python scripts/xiaoxitong_run_all.py
-    uv run python scripts/xiaoxitong_run_all.py --refresh-atm --strict
+    uv run python -m data_mining.xiaoxitong.run_all
+    uv run python -m data_mining.xiaoxitong.run_all --refresh-atm --strict
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
-import sys
 from datetime import datetime
 from pathlib import Path
 
-import xiaoxitong_atm as atm
-import xiaoxitong_html as html
-import xiaoxitong_report as base
 from loguru import logger
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+from . import atm, html
+from . import report as base
 
 
 def record(issues: list[tuple[str, str]], scope: str, detail: object) -> None:

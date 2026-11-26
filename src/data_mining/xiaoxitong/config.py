@@ -1,4 +1,4 @@
-"""小系统脚本的公共配置：从项目根目录 ``.env`` 读取内部假设参数。
+"""小系统报告子包的公共配置：从项目根目录 ``.env`` 读取内部假设参数。
 
 脱敏原则：激光波长、功率、光斑/发散角等数值只用于内部计算与文本替换，
 不写入任何 md/csv 产物；脚本中不再硬编码这些数值。
@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[3]
 ENV_FILE = ROOT / ".env"
 
 

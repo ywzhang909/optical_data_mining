@@ -5,22 +5,16 @@
 
 from __future__ import annotations
 
-import sys
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
-SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
-if str(SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS))
-
-import xiaoxitong_atm as atm  # noqa: E402
-import xiaoxitong_html as html  # noqa: E402
-import xiaoxitong_report as base  # noqa: E402
+from data_mining.xiaoxitong import atm, html
+from data_mining.xiaoxitong import report as base
 
 
 def make_exp(**overrides) -> base.Experiment:
@@ -214,6 +208,64 @@ def test_synergy_report_renders_sections_without_raw_less_than() -> None:
     assert "500W" not in payload
     assert list(frame["试验"]) == [exp.exp_id]
     assert frame.loc[0, "窗口分钟"] == pytest.approx(20.5)
+
+
+def test_lag_scan_handles_empty_series_and_short_input() -> None:
+    empty = pd.Series(dtype=float, index=pd.DatetimeIndex([], dtype="datetime64[ns]"))
+    series = minute_series([1.0, 3.0, 5.0], datetime(2026, 10, 9, 10, 0))
+    assert html.lag_value(empty, datetime(2026, 10, 9, 10, 0), 0) is None
+    assert html.lag_value(series, datetime(2026, 10, 9, 10, 0), 0) == pytest.approx(3.0)
+    assert html.lag_value(series, datetime(2026, 10, 9, 10, 30), 0) is None
+    exp = make_exp(
+        capture_start=datetime(2026, 10, 9, 10, 0, 10),
+        capture_end=datetime(2026, 10, 9, 10, 0, 40),
+        breakdown="3.40s",
+    )
+    sample = html.collect_windows([exp], {"wind": pd.DataFrame({"中位": empty})})[0]
+    assert html.lag_scan(empty, [sample], offsets=(0, 10)) == {0: None, 10: None}
+    assert html.quartile_range([1.0, 2.0]) is None
+    assert html.quartile_range([1.0, 3.0, 5.0]) == pytest.approx(2.0)
+    assert html.quartile_range([1.0, 2.0, 3.0, 4.0]) == pytest.approx(1.5)
+
+
+def test_synergy_report_renders_trend_matrix_group_and_lag_tables() -> None:
+    start = datetime(2026, 10, 9, 8, 0)
+    wind = [2.0 + 0.6 * float(np.sin(index / 7.0)) + 0.01 * index for index in range(210)]
+    humidity = [60.0 - 0.05 * float(index) for index in range(210)]
+    channels = {
+        "wind": pd.DataFrame({"中位": minute_series(wind, start), "探针数": 2}),
+        "humidity": pd.DataFrame({"中位": minute_series(humidity, start), "探针数": 2}),
+    }
+    experiments = []
+    for index in range(8):
+        moment = datetime(2026, 10, 9, 9, 0) + timedelta(minutes=15 * index)
+        experiments.append(
+            make_exp(
+                seq=index + 1,
+                breakdown=f"{3.0 + 0.5 * index:.2f}s",
+                distance="600m" if index < 4 else "700m",
+                fan_count="0" if index < 4 else "2 台风机",
+                power="标准功率" if index % 2 == 0 else "低功率",
+                capture_start=moment,
+                capture_end=moment + timedelta(seconds=30),
+            )
+        )
+    payload, _frame = html.synergy_report(
+        experiments, channels, days=["20261009"], generated=datetime(2026, 11, 25, 19, 0), root=Path("data/daily_data")
+    )
+    for caption in (
+        "击穿时间随试验次序的变化",
+        "逐日击穿时间随试验次序的秩相关与线性斜率",
+        "环境要素与击穿时间的秩相关矩阵",
+        "击穿时间与各通道在不同滞后窗口上的秩相关（窗口宽 10 分钟）",
+        "按风机配置、作用距离与功率档位分组的击穿时间中位数",
+    ):
+        assert caption in payload
+    assert "四分位距" in payload
+    assert "未做多重比较校正" in payload
+    assert "p = <" not in payload
+    assert "500W" not in payload
+    assert "5000W" not in payload
 
 
 def test_p_text_is_safe_in_html() -> None:

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """小系统试验参数相关性分析工具。
 
-基于 ``xiaoxitong_report.py`` 的解析结果，对每次试验的参数做统计关联分析：
+基于 ``data_mining.xiaoxitong.report`` 的解析结果，对每次试验的参数做统计关联分析：
 
   * 数值型字段：Spearman 秩相关（成对完整样本，给出 n 与 p）
   * 分类型字段：Cramér's V 关联强度 + 卡方检验
@@ -13,8 +13,8 @@
     <out>/参数相关性_数值.csv
 
 Usage:
-    uv run python scripts/xiaoxitong_correlation.py
-    uv run python scripts/xiaoxitong_correlation.py --root data/小系统 --out data/小系统/试验报告
+    uv run python -m data_mining.xiaoxitong.correlation
+    uv run python -m data_mining.xiaoxitong.correlation --root data/小系统 --out data/小系统/试验报告
 """
 
 from __future__ import annotations
@@ -24,14 +24,12 @@ import contextlib
 import csv
 import math
 import re
-import sys
 from pathlib import Path
 
 import numpy as np
 from scipy import stats
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import xiaoxitong_report as base  # noqa: E402
+from . import report as base
 
 SECONDS_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:s|S|秒)")
 METERS_RE = re.compile(r"(\d+(?:\.\d+)?)\s*m\b")

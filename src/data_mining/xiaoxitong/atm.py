@@ -13,15 +13,14 @@
 分钟级中间结果落盘缓存，重复运行不再重读 GB 级 CSV。
 
 Usage:
-    uv run python scripts/xiaoxitong_atm.py --days 20261009 20261010 20261012
-    uv run python scripts/xiaoxitong_atm.py --out data/小系统/试验报告/大气窗口统计.csv
+    uv run python -m data_mining.xiaoxitong.atm --days 20261009 20261010 20261012
+    uv run python -m data_mining.xiaoxitong.atm --out data/小系统/试验报告/大气窗口统计.csv
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import sys
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -30,13 +29,8 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-for extra in (REPO_ROOT, Path(__file__).resolve().parent):
-    if str(extra) not in sys.path:
-        sys.path.insert(0, str(extra))
-
-from ui.analysis.thermo.discovery import discover  # noqa: E402
-from ui.analysis.thermo.ingest import load_aux_minute_means  # noqa: E402
+from ui.analysis.thermo.discovery import discover
+from ui.analysis.thermo.ingest import load_aux_minute_means
 
 DEFAULT_ATM_ROOT = Path("data/daily_data")
 DEFAULT_CACHE_DIR = Path("data/小系统/试验报告/.cache/atm")

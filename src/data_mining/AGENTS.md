@@ -30,7 +30,7 @@ input_sources/
 - **JSON parsing** — Kafka uses configurable `value_parser` (default: `json.loads`); RabbitMQ uses `json.loads` directly
 
 ## NOTES
-- This is the ONLY module in the pip-installable `data_mining` package
+- `input_sources/` and `xiaoxitong/` are the two subpackages of the pip-installable `data_mining` package; `xiaoxitong/` provides the 小系统 report generators (entry: `uv run python -m data_mining.xiaoxitong.run_all`)
 - Analysis/visualization code lives in `ui/analysis/` (not part of this package)
 - The `KafkaInput` reads up to `max_messages` (default 100) from earliest offset
 - The `RabbitMQInput` uses `basic_get` (polling, not streaming consume)

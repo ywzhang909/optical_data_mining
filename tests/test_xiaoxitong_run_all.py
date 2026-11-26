@@ -2,19 +2,13 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
-SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
-if str(SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS))
-
-import xiaoxitong_atm as atm  # noqa: E402
-import xiaoxitong_report as base  # noqa: E402
-import xiaoxitong_run_all as run_all  # noqa: E402
+from data_mining.xiaoxitong import atm, run_all
+from data_mining.xiaoxitong import report as base
 
 
 def make_root(tmp_path: Path, name: str = "01_试验") -> Path:

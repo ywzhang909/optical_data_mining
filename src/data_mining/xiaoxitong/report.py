@@ -8,9 +8,9 @@
   * 可选的 ``试验元数据.csv``（补充抛光程度、波长、温湿度等未记录项）
 
 Usage:
-    uv run python scripts/xiaoxitong_report.py
-    uv run python scripts/xiaoxitong_report.py --root data/小系统 --out data/小系统/试验报告
-    uv run python scripts/xiaoxitong_report.py --refresh-metadata
+    uv run python -m data_mining.xiaoxitong.report
+    uv run python -m data_mining.xiaoxitong.report --root data/小系统 --out data/小系统/试验报告
+    uv run python -m data_mining.xiaoxitong.report --refresh-metadata
 
 输出（默认 ``data/小系统/试验报告/``）：
     索引.md
@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from xiaoxitong_config import env_float
+from .config import env_float
 
 DATE_RE = re.compile(r"^\d{8}$")
 CAPTURE_RE = re.compile(r"(\d{8})_(\d{14})_(\d{14})_(\d{6})")
@@ -917,7 +917,7 @@ def generate(root: Path, out_dir: Path, metadata_path: Path, refresh_metadata: b
 
 
 def default_root() -> Path:
-    return Path(__file__).resolve().parents[1] / "data" / "小系统"
+    return Path(__file__).resolve().parents[3] / "data" / "小系统"
 
 
 def main(argv: list[str] | None = None) -> int:

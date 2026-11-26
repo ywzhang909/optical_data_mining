@@ -13,9 +13,10 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from xiaoxitong_config import env_float
 
-ROOT = Path(__file__).resolve().parents[1]
+from .config import env_float
+
+ROOT = Path(__file__).resolve().parents[3]
 DATA_DIR = ROOT / "data" / "小系统"
 REPORT_DIR = DATA_DIR / "试验报告"
 TABLE_CSV = REPORT_DIR / "试验参数总表.csv"
@@ -317,9 +318,9 @@ def write_report(
     lines.append("# 理论计算汇总（小系统试验）\n")
     lines.append(
         "激光工作于近红外常用波段；功率为「标准功率 / 低功率」两档。按脱敏要求，波长、口径、发散角、"
-        "脉宽、重频、功率密度、能量等激光参数均以文字描述、不记录具体数值，数值只存于项目根目录 `.env`（由 `scripts/xiaoxitong_config.py` 读取），不写入任何产物。"
+        "脉宽、重频、功率密度、能量等激光参数均以文字描述、不记录具体数值，数值只存于项目根目录 `.env`（由 `data_mining.xiaoxitong.config` 读取），不写入任何产物。"
     )
-    lines.append("以下表格由 `scripts/xiaoxitong_theory.py` 自动生成，公式来源见《参考文献表.md》。")
+    lines.append("以下表格由 `data_mining.xiaoxitong.theory` 自动生成，公式来源见《参考文献表.md》。")
     lines.append("所有数值均为情景计算：输入量（Cn2、消光系数、吸收率、效率因子）取文献典型范围，非本试验实测。\n")
 
     lines.append("## 1. 湍流参数（平面波，水平路径）\n")

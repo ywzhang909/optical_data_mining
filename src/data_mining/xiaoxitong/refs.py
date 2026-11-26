@@ -1,9 +1,9 @@
 """小系统激光打靶试验的参考文献表: 逐条通过 doi.org 内容协商核实元数据.
 
 用法:
-    uv run python scripts/xiaoxitong_refs.py            # 用缓存生成 参考文献表.md
-    uv run python scripts/xiaoxitong_refs.py --verify   # 补齐缺失/失败条目的 bibtex
-    uv run python scripts/xiaoxitong_refs.py --refresh  # 强制重新核实全部条目
+    uv run python -m data_mining.xiaoxitong.refs            # 用缓存生成 参考文献表.md
+    uv run python -m data_mining.xiaoxitong.refs --verify   # 补齐缺失/失败条目的 bibtex
+    uv run python -m data_mining.xiaoxitong.refs --refresh  # 强制重新核实全部条目
 
 输出:
     data/小系统/试验报告/参考文献表.md
@@ -20,7 +20,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[3]
 REPORT_DIR = ROOT / "data" / "小系统" / "试验报告"
 CACHE = REPORT_DIR / ".refs_cache.json"
 OUT_MD = REPORT_DIR / "参考文献表.md"
